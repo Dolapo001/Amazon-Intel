@@ -124,7 +124,7 @@ def _ingest_asin_internal(asin_code: str, parallel: bool = True):
             asin_obj = ASIN.objects.get(asin=asin_code)
         except ASIN.DoesNotExist:
             logger.warning("scrape_failed_no_record", extra={"asin": asin_code})
-            return
+            raise ValueError(f"Scraper returned no data for ASIN {asin_code} and no existing record found")
 
     # ── 3. Heavy Analytics ───────────────────────────────────────────────
     if asin_obj:
@@ -185,26 +185,13 @@ def ingest_asin(self, asin_code: str):
 def synchronous_full_ingest(asin_code: str):
     """
     Used by the view for new ASINs to ensure immediate full response.
-    Guaranteed to return an ASIN object (skeleton if scraper fails).
+    Raises if the scraper fails so the caller can return a proper error.
     """
-    try:
-        # Use sequential mode for better stability in synchronous API environment
-        _ingest_asin_internal(asin_code, parallel=False)
-    except Exception:
-        logger.exception("sync_ingest_internal_error", extra={"asin": asin_code})
-    
-    from apps.products.models import ASIN, Category
-    try:
-        return ASIN.objects.get(asin=asin_code)
-    except ASIN.DoesNotExist:
-        # SCRAPER FAILED to create the record (e.g. DNS or 404)
-        # We create a placeholder to fulfill the "always return structure" requirement.
-        cat, _ = Category.objects.get_or_create(name="Uncategorized")
-        return ASIN.objects.create(
-            asin=asin_code,
-            title=f"Amazon Product {asin_code} (Processing...)",
-            category=cat
-        )
+    # Use sequential mode for better stability in synchronous API environment
+    _ingest_asin_internal(asin_code, parallel=False)
+
+    from apps.products.models import ASIN
+    return ASIN.objects.get(asin=asin_code)
 
 
 # ── Review fetch + NLP task ───────────────────────────────────────────────────
