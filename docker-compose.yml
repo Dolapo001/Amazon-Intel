@@ -1,5 +1,19 @@
 services:
 
+  # ── MCP Proxy (Context Protocol marketplace endpoint) ─────────────────────
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    environment:
+      BACKEND_URL: http://web:5000
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - web
+    restart: unless-stopped
+
   # ── Web Application ────────────────────────────────────────────────────────
   web:
     build:
