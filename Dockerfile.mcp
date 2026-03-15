@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir mcp httpx
+
+# Copy proxy script
+COPY mcp_proxy.py .
+
+# Environment Defaults
+ENV BACKEND_URL=http://web:8000
+ENV PORT=3000
+
+# Run mcp server
+ENTRYPOINT ["python", "mcp_proxy.py"]

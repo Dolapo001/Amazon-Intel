@@ -1,0 +1,3 @@
+# docker-compose.override.yml
+# This file is automatically merged by docker-compose.
+# No overrides needed — all config is in docker-compose.yml.

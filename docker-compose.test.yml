@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  test-pip:
+    image: python:3.11-slim
+    volumes:
+      - ./requirements.txt:/requirements.txt
+    command: sh -c 'ping -c 3 pypi.org && pip install --default-timeout=1000 --no-cache-dir -r /requirements.txt'
+
