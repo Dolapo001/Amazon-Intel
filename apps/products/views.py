@@ -16,7 +16,7 @@ from apps.analytics.bsr import compute_bsr_trend
 from apps.analytics.revenue import build_revenue_payload
 from apps.analytics.nlp import get_review_analysis
 from apps.ingestion.tasks import enqueue_asin_refresh
-from .cache import get_cached_intel, set_cached_intel
+from .cache import get_cached_intel, set_cached_intel, invalidate_intel
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,8 @@ class ProductIntelligenceView(APIView):
                 "category", "revenue_estimate", "review_analysis"
             ).get(asin=asin_code)
         except ASIN.DoesNotExist:
-            # NEW ASIN: Perform synchronous fast-path ingest to avoid multiple requests
+            # NEW ASIN: clear any stale placeholder cache, then do synchronous ingest
+            invalidate_intel(asin_code)
             logger.info("new_asin_sync_ingest_start", extra={"asin": asin_code})
             from apps.ingestion.tasks import synchronous_full_ingest
             try:
@@ -93,8 +94,9 @@ class ProductIntelligenceView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Cache the assembled payload for subsequent fast L1 lookups
-        set_cached_intel(asin_code, payload, tier=asin_obj.tier)
+        # Only cache if real data was ingested — never cache placeholder/incomplete payloads
+        if asin_obj.last_ingested_at:
+            set_cached_intel(asin_code, payload, tier=asin_obj.tier)
 
         return Response(payload)
 
