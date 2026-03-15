@@ -95,7 +95,8 @@ def _ingest_asin_internal(asin_code: str, parallel: bool = True):
     asin_obj = None
     if product:
         category, _ = Category.objects.get_or_create(
-            name=product.get("category_name", "Uncategorized")
+            amazon_id=product.get("category_id") or "uncategorized",
+            defaults={"name": product.get("category_name") or "Uncategorized"},
         )
         asin_obj, _ = ASIN.objects.update_or_create(
             asin=asin_code,
