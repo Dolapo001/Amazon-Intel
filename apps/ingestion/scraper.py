@@ -153,14 +153,15 @@ def fetch_reviews(asin: str, max_count: int = 100, country: str = "US", fast_mod
     unique_reviews = {}  # {text_hash: review_dict}
     
     # In fast mode, we only probe once to stay under the latency budget
-    probes = ["recent"] if fast_mode else ["recent", "helpfulness"]
+    # Apify accepts "recent" and "helpful" (not "helpfulness")
+    probes = ["recent"] if fast_mode else ["recent", "helpful"]
     timeout = 30.0 if fast_mode else _TIMEOUT
-    
+
     for sort_by in probes:
         payload = {
             "productUrls": [{"url": f"https://www.amazon.com/dp/{asin}"}],
             "maxReviews": max_count,
-            "country": country,
+            "proxyCountry": "AUTO_SELECT_PROXY_COUNTRY",
             "sortBy": sort_by,
         }
         try:
@@ -241,7 +242,7 @@ def _parse_product(item: dict, asin: str) -> Optional[dict]:
             category_name = c
             break
     if not category_name:
-        category_name = crumbs[0] if crumbs else item.get("categoryName", "")
+        category_name = crumbs[0] if crumbs else (item.get("category") or item.get("categoryName") or "")
     
     # Use the first segment as the primary category ID
     primary_category = crumbs[0] if crumbs else (category_name or "unknown")
