@@ -6,11 +6,12 @@ import logging
 from mcp.server import Server, NotificationOptions
 from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, EmbeddedContent
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, JSONResponse
+from ctxprotocol import verify_context_request, is_protected_mcp_method, ContextError
 import uvicorn
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,36 @@ async def handle_list_tools() -> list[Tool]:
                 },
                 "required": ["identifier"]
             },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "asin": {"type": "string"},
+                    "revenue_data": {
+                        "type": "object",
+                        "properties": {
+                            "monthly": {"type": "number"},
+                            "yoyChange": {"type": "number"},
+                            "currency": {"type": "string"}
+                        }
+                    },
+                    "bsr_trend": {
+                        "type": "object",
+                        "properties": {
+                            "current": {"type": "number"},
+                            "trend": {"type": "string"},
+                            "velocity": {"type": "number"}
+                        }
+                    },
+                    "sentiment_analysis": {
+                        "type": "object",
+                        "properties": {
+                            "score": {"type": "number"},
+                            "themes": {"type": "array", "items": {"type": "string"}}
+                        }
+                    },
+                    "curated_summary": {"type": "string"}
+                }
+            }
         )
     ]
 
@@ -80,7 +111,11 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 )]
 
             if response.status_code == 200:
-                return [TextContent(type="text", text=json.dumps(response.json(), indent=2))]
+                data = response.json()
+                return [
+                    TextContent(type="text", text=json.dumps(data, indent=2)),
+                    EmbeddedContent(type="embedded", data=data)  # structuredContent
+                ]
 
             return [TextContent(
                 type="text",
@@ -116,6 +151,17 @@ def create_app() -> Starlette:
             )
 
     async def handle_messages(request: Request) -> Response:
+        body = await request.json()
+        if is_protected_mcp_method(body.get("method", "")):
+            try:
+                await verify_context_request(
+                    authorization_header=request.headers.get("authorization", "")
+                )
+            except ContextError as e:
+                return JSONResponse(
+                    {"error": f"Unauthorized: {e.message}"}, 
+                    status_code=401
+                )
         await sse.handle_post_message(request.scope, request.receive, request._send)
 
     async def handle_health(request: Request) -> Response:

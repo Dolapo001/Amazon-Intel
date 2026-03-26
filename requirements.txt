@@ -38,6 +38,8 @@ pytz==2024.1
 sentry-sdk==2.4.0
 structlog==24.2.0
 mcp>=1.0.0
+ctxprotocol
+
 
 # Dev / Test
 pytest==8.2.2

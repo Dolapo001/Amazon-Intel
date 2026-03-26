@@ -3,7 +3,8 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install dependencies
-RUN pip install --no-cache-dir mcp httpx uvicorn starlette
+RUN pip install --no-cache-dir mcp[fastapi] httpx uvicorn starlette ctxprotocol
+
 
 # Copy proxy script
 COPY mcp_proxy.py .

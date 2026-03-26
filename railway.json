@@ -1,0 +1,41 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "services": {
+    "web": {
+      "name": "Amazon Intel Backend",
+      "source": {
+        "directory": "."
+      },
+      "build": {
+        "builder": "DOCKERFILE",
+        "dockerfilePath": "Dockerfile"
+      },
+      "deploy": {
+        "numReplicas": 1,
+        "sleepOnIdle": false,
+        "healthcheckPath": "/health/",
+        "healthcheckTimeout": 300
+      }
+    },
+    "mcp": {
+      "name": "Amazon Intel MCP Proxy",
+      "source": {
+        "directory": "."
+      },
+      "build": {
+        "builder": "DOCKERFILE",
+        "dockerfilePath": "Dockerfile.mcp"
+      },
+      "deploy": {
+        "numReplicas": 1,
+        "sleepOnIdle": false,
+        "healthcheckPath": "/health",
+        "healthcheckTimeout": 300,
+        "envVars": {
+          "BACKEND_URL": "${{web.RAILWAY_STATIC_URL}}",
+          "PORT": "3000"
+        }
+      }
+    }
+  }
+}

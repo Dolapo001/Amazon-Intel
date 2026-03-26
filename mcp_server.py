@@ -8,7 +8,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.base")
 django.setup()
 
+from mcp.types import TextContent
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server.middleware import Middleware, MiddlewareContext
+from mcp.server.fastmcp.server.dependencies import get_http_headers
+from mcp.exceptions import ToolError
+from ctxprotocol import verify_context_request, ContextError
+
 from apps.products.models import ASIN
 from apps.analytics.revenue import build_revenue_payload
 from apps.analytics.bsr import compute_bsr_trend
@@ -19,7 +25,34 @@ from apps.analytics.models import OpportunityScore, TrendingProduct
 # Create the MCP server
 mcp = FastMCP("Amazon Intelligence")
 
-@mcp.tool()
+class ContextProtocolAuth(Middleware):
+    """Verify Context Protocol JWT on tool calls only."""
+    
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        headers = get_http_headers()
+        try:
+            await verify_context_request(
+                authorization_header=headers.get("authorization", "")
+            )
+        except ContextError as e:
+            raise ToolError(f"Unauthorized: {e.message}")
+        return await call_next(context)
+
+mcp.add_middleware(ContextProtocolAuth())
+
+@mcp.tool(
+    output_schema={
+        "type": "object",
+        "properties": {
+            "asin": {"type": "string"},
+            "revenue_data": {"type": "object"},
+            "bsr_trend": {"type": "object"},
+            "sentiment_analysis": {"type": "object"},
+            "curated_summary": {"type": "string"},
+            "data_freshness": {"type": "string"}
+        }
+    }
+)
 def get_product_intelligence(asin_code: str) -> dict:
     """
     Get Tier S curated intelligence for any Amazon ASIN.
@@ -38,7 +71,7 @@ def get_product_intelligence(asin_code: str) -> dict:
     summary = f"Estimated Revenue: ${revenue['monthly']:,.0f}/mo ({revenue['yoyChange']}% YoY). "
     summary += f"Sentiment: {sentiment['score']}/5. Trend: {bsr['trend'].capitalize()}."
 
-    return {
+    data = {
         "asin": asin_code,
         "revenue_data": revenue,
         "bsr_trend": bsr,
@@ -46,9 +79,28 @@ def get_product_intelligence(asin_code: str) -> dict:
         "curated_summary": summary,
         "data_freshness": asin_obj.last_ingested_at.isoformat() if asin_obj.last_ingested_at else "Stale"
     }
+    
+    return {
+        "content": [TextContent(type="text", text=summary)],
+        "structuredContent": data
+    }
 
-@mcp.tool()
-def find_market_opportunities() -> list:
+@mcp.tool(
+    output_schema={
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "niche": {"type": "string"},
+                "opportunity_score": {"type": "number"},
+                "profitability": {"type": "number"},
+                "recommendation": {"type": "string"},
+                "growth": {"type": "number"}
+            }
+        }
+    }
+)
+def find_market_opportunities() -> dict:
     """
     Unbundle costly market research. Returns top underserved niches 
     with high profitability and low market dominance.
@@ -67,16 +119,35 @@ def find_market_opportunities() -> list:
             "recommendation": s.recommendation,
             "growth": s.demand_growth_pct
         })
-    return results
 
-@mcp.tool()
-def get_trending_products() -> list:
+    summary = f"Found {len(results)} underserved niches with high opportunity scores."
+    return {
+        "content": [TextContent(type="text", text=summary)],
+        "structuredContent": results
+    }
+
+@mcp.tool(
+    output_schema={
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "asin": {"type": "string"},
+                "title": {"type": "string"},
+                "velocity_score": {"type": "number"},
+                "improvement_pct": {"type": "number"},
+                "current_bsr": {"type": "number"}
+            }
+        }
+    }
+)
+def get_trending_products() -> dict:
     """
     Returns products experiencing rapid BSR improvement (momentum).
     """
     trending = TrendingProduct.objects.filter(is_active=True).select_related('asin')[:10]
     
-    return [{
+    results = [{
         "asin": t.asin.asin,
         "title": t.asin.title,
         "velocity_score": t.velocity_score,
@@ -84,5 +155,11 @@ def get_trending_products() -> list:
         "current_bsr": t.asin.current_bsr
     } for t in trending]
 
+    summary = f"Found {len(results)} products with high sales momentum."
+    return {
+        "content": [TextContent(type="text", text=summary)],
+        "structuredContent": results
+    }
+
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="http", port=3000)
