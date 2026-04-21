@@ -1,18 +1,35 @@
-import os
-import httpx
-import re
+"""
+Amazon Intelligence MCP proxy.
+
+Thin MCP server that proxies into the Django REST backend. Aligned with the
+Context Protocol marketplace contract:
+
+  * Dual-surface ready: Query (pay-per-response) + Execute (pay-per-call)
+  * Every method declares `_meta.surface`, `queryEligible`, `latencyClass`,
+    `pricing.executeUsd`, and `rateLimit`
+  * Every method publishes an `outputSchema`; every response includes
+    `structuredContent` so agents can consume typed output
+  * Input schemas use standard JSON Schema `default` / `examples` hints so the
+    runtime can generate valid arguments on first pass
+  * Discovery-layer tools (`get_all_categories`, `browse_by_category`) so
+    agents can enumerate the full surface area, not just trending items
+"""
 import json
 import logging
-from mcp.server import Server, NotificationOptions
+import os
+import re
+
+import httpx
+import uvicorn
+from ctxprotocol import ContextError, is_protected_mcp_method, verify_context_request
+from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent, EmbeddedContent
+from mcp.types import TextContent, Tool
 from starlette.applications import Starlette
-from starlette.routing import Route
 from starlette.requests import Request
-from starlette.responses import Response, JSONResponse
-from ctxprotocol import verify_context_request, is_protected_mcp_method, ContextError
-import uvicorn
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 logger = logging.getLogger(__name__)
 
@@ -25,107 +42,542 @@ PORT = int(os.getenv("PORT", "3000"))
 ASIN_RE = re.compile(r"^[A-Z0-9]{10}$")
 AMAZON_URL_RE = re.compile(r"/dp/([A-Z0-9]{10})")
 
+# ── Marketplace pricing / rate-limit metadata ───────────────────────────────
+# Listing response price (Query surface) is set in the marketplace UI.
+# Execute prices below are per method call, ~1/100 of the listing response
+# price per the Context Protocol pricing guidance.
+EXECUTE_PRICE_INTEL = "0.001"   # synthesised intelligence (paid call)
+EXECUTE_PRICE_RAW = "0.0005"    # normalised raw data
+EXECUTE_PRICE_DISCOVERY = "0.0002"  # enumeration / listing
+
+BACKEND_RATE_LIMIT = {
+    "maxRequestsPerMinute": 60,
+    "cooldownMs": 1000,
+    "maxConcurrency": 5,
+    "supportsBulk": False,
+    "notes": "Backend serves L1 (Redis) cache hits instantly; cold ASINs trigger synchronous ingest.",
+}
+
 # ── Initialize MCP Server ───────────────────────────────────────────────────
 server = Server("Amazon Intelligence Proxy")
+
+
+def _tool(**kwargs) -> Tool:
+    """Build a Tool instance that preserves `_meta` through the MCP wire format.
+
+    The pydantic model on recent mcp SDK versions aliases `meta` ↔ `_meta`.
+    Using `model_validate` round-trips the `_meta` key regardless of whether
+    the installed version exposes it as a declared field or as an extra.
+    """
+    return Tool.model_validate(kwargs)
 
 
 @server.list_tools()
 async def handle_list_tools() -> list[Tool]:
     return [
-        Tool(
+        # ── Tier 1: Intelligence (synthesised, Query-first) ────────────────
+        _tool(
             name="amazon_product_intelligence",
             description=(
-                "Returns BSR trends, estimated monthly revenue, and NLP review sentiment "
-                "for any Amazon product ASIN. Replaces Jungle Scout ($500/yr) for "
-                "on-demand product intelligence."
+                "TIER 1 INTELLIGENCE: Full Amazon product report for a single ASIN. "
+                "Synthesises BSR trend, estimated monthly revenue (with YoY delta), "
+                "and NLP-derived sentiment + positive/negative themes into a single "
+                "curated payload. Replaces the core Jungle Scout ($500/yr) workflow "
+                "for on-demand product intelligence.\n\n"
+                "DATA FLOW:\n"
+                "  amazon_product_intelligence → revenue_estimate + bsr_trend + review_analysis\n\n"
+                "COMPOSABILITY:\n"
+                "  Pair with browse_by_category to rank products inside a niche, or\n"
+                "  with amazon_trending_products to spot momentum before synthesising."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "identifier": {
                         "type": "string",
-                        "description": "Amazon ASIN (e.g. B09G9HD6PD) or full Amazon product URL"
-                    }
+                        "description": "Amazon ASIN (10 chars, e.g. 'B09G9HD6PD') or a full Amazon product URL (e.g. 'https://www.amazon.com/dp/B08N5WRWNW').",
+                        "examples": [
+                            "B09G9HD6PD",
+                            "B08N5WRWNW",
+                            "https://www.amazon.com/dp/B07XJ8C8F5",
+                        ],
+                    },
                 },
-                "required": ["identifier"]
+                "required": ["identifier"],
             },
             outputSchema={
                 "type": "object",
                 "properties": {
                     "asin": {"type": "string"},
-                    "revenue_data": {
+                    "title": {"type": "string"},
+                    "brand": {"type": "string"},
+                    "category": {"type": ["string", "null"]},
+                    "estimatedRevenue": {
                         "type": "object",
                         "properties": {
                             "monthly": {"type": "number"},
-                            "yoyChange": {"type": "number"},
-                            "currency": {"type": "string"}
-                        }
+                            "yoyChange": {"type": ["number", "null"]},
+                            "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                            "currency": {"type": "string", "enum": ["USD"]},
+                        },
                     },
-                    "bsr_trend": {
+                    "bsrTrend": {
                         "type": "object",
                         "properties": {
-                            "current": {"type": "number"},
-                            "trend": {"type": "string"},
-                            "velocity": {"type": "number"}
-                        }
+                            "currentRank": {"type": ["integer", "null"]},
+                            "yoyChange": {"type": ["number", "null"]},
+                            "trend": {
+                                "type": "string",
+                                "enum": ["improving", "declining", "stable", "unknown"],
+                            },
+                        },
                     },
-                    "sentiment_analysis": {
+                    "sentiment": {
                         "type": "object",
                         "properties": {
-                            "score": {"type": "number"},
-                            "themes": {"type": "array", "items": {"type": "string"}}
-                        }
+                            "score": {"type": ["number", "null"], "minimum": 0, "maximum": 5},
+                            "positiveThemes": {"type": "array", "items": {"type": "string"}},
+                            "negativeThemes": {"type": "array", "items": {"type": "string"}},
+                        },
                     },
-                    "curated_summary": {"type": "string"}
-                }
-            }
-        )
+                    "reviews": {
+                        "type": "object",
+                        "properties": {
+                            "count": {"type": ["integer", "null"]},
+                            "velocity": {"type": ["number", "null"]},
+                        },
+                    },
+                    "curated_summary": {"type": "string"},
+                    "data_freshness": {
+                        "type": "string",
+                        "enum": ["real-time", "near-real-time", "cached", "stale"],
+                    },
+                    "cacheHit": {"type": "boolean"},
+                },
+                "required": ["asin", "curated_summary"],
+            },
+            **{
+                "_meta": {
+                    "surface": "both",
+                    "queryEligible": True,
+                    "latencyClass": "fast",
+                    "pricing": {"executeUsd": EXECUTE_PRICE_INTEL},
+                    "rateLimit": BACKEND_RATE_LIMIT,
+                },
+            },
+        ),
+
+        # ── Tier 1: Intelligence (opportunity discovery) ───────────────────
+        _tool(
+            name="find_market_opportunities",
+            description=(
+                "TIER 1 INTELLIGENCE: Returns the top underserved Amazon niches ranked "
+                "by an opportunity score (profitability × inverse-saturation × demand "
+                "growth). Use this to unbundle costly seller-research subscriptions "
+                "such as Helium 10 / Jungle Scout niche discovery.\n\n"
+                "COMPOSABILITY:\n"
+                "  Feed a returned niche into browse_by_category to list live ASINs,\n"
+                "  then call amazon_product_intelligence on each for deep analysis."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of niches to return.",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
+                        "examples": [5, 10, 25],
+                    },
+                },
+                "required": [],
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "opportunities": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "niche": {"type": "string"},
+                                "opportunity_score": {"type": "number", "minimum": 0, "maximum": 100},
+                                "profitability": {"type": "number"},
+                                "competition_index": {"type": "number"},
+                                "demand_growth_pct": {"type": ["number", "null"]},
+                                "recommendation": {"type": "string"},
+                            },
+                        },
+                    },
+                    "total_count": {"type": "integer"},
+                    "timestamp": {"type": "string", "format": "date-time"},
+                },
+                "required": ["opportunities", "total_count", "timestamp"],
+            },
+            **{
+                "_meta": {
+                    "surface": "both",
+                    "queryEligible": True,
+                    "latencyClass": "fast",
+                    "pricing": {"executeUsd": EXECUTE_PRICE_INTEL},
+                    "rateLimit": BACKEND_RATE_LIMIT,
+                },
+            },
+        ),
+
+        # ── Tier 1: Intelligence (trending momentum) ───────────────────────
+        _tool(
+            name="amazon_trending_products",
+            description=(
+                "TIER 1 INTELLIGENCE: Returns products experiencing rapid BSR improvement "
+                "(positive momentum) over the detection window, ranked by velocity score. "
+                "Use this to find rising ASINs before they hit best-seller lists.\n\n"
+                "COMPOSABILITY:\n"
+                "  Each result includes an ASIN — pipe into amazon_product_intelligence\n"
+                "  for the deeper revenue / sentiment read-out."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of trending products to return.",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
+                        "examples": [10, 25, 50],
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Optional Amazon category id/slug to filter by. Use get_all_categories to enumerate.",
+                        "examples": ["electronics", "home-kitchen"],
+                    },
+                },
+                "required": [],
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "trending": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "asin": {"type": "string"},
+                                "title": {"type": "string"},
+                                "velocity_score": {"type": "number"},
+                                "improvement_pct": {"type": "number"},
+                                "current_bsr": {"type": ["integer", "null"]},
+                            },
+                        },
+                    },
+                    "total_count": {"type": "integer"},
+                    "timestamp": {"type": "string", "format": "date-time"},
+                },
+                "required": ["trending", "total_count", "timestamp"],
+            },
+            **{
+                "_meta": {
+                    "surface": "both",
+                    "queryEligible": True,
+                    "latencyClass": "fast",
+                    "pricing": {"executeUsd": EXECUTE_PRICE_INTEL},
+                    "rateLimit": BACKEND_RATE_LIMIT,
+                },
+            },
+        ),
+
+        # ── Tier 2: Normalised raw data (Execute-first) ────────────────────
+        _tool(
+            name="get_bsr_history",
+            description=(
+                "TIER 2 RAW DATA: Daily BSR time-series for an ASIN. Returns a "
+                "normalised array of {date, bsr, price} suitable for charting or "
+                "downstream ML. Use when you need the raw series rather than the "
+                "synthesised trend from amazon_product_intelligence."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "asin": {
+                        "type": "string",
+                        "pattern": "^[A-Z0-9]{10}$",
+                        "description": "10-character Amazon ASIN.",
+                        "examples": ["B09G9HD6PD", "B08N5WRWNW"],
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Lookback window in days.",
+                        "default": 90,
+                        "minimum": 1,
+                        "maximum": 730,
+                        "examples": [30, 90, 365],
+                    },
+                },
+                "required": ["asin"],
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "asin": {"type": "string"},
+                    "days": {"type": "integer"},
+                    "snapshots": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "date": {"type": "string", "format": "date"},
+                                "bsr": {"type": "integer"},
+                                "price": {"type": ["number", "null"]},
+                            },
+                            "required": ["date", "bsr"],
+                        },
+                    },
+                    "timestamp": {"type": "string", "format": "date-time"},
+                },
+                "required": ["asin", "snapshots", "timestamp"],
+            },
+            **{
+                "_meta": {
+                    "surface": "execute",
+                    "queryEligible": False,
+                    "latencyClass": "fast",
+                    "pricing": {"executeUsd": EXECUTE_PRICE_RAW},
+                    "rateLimit": BACKEND_RATE_LIMIT,
+                },
+            },
+        ),
+
+        # ── Discovery layer: enumerate categories ──────────────────────────
+        _tool(
+            name="get_all_categories",
+            description=(
+                "DISCOVERY: List ALL Amazon categories known to the index. Returns "
+                "{id, name, slug} tuples that can be passed to browse_by_category or "
+                "amazon_trending_products.category. Use this before any browse call — "
+                "otherwise you can only find trending/popular items, not the full surface.\n\n"
+                "DATA FLOW:\n"
+                "  get_all_categories → category_id → browse_by_category → ASINs → amazon_product_intelligence"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "default": 100,
+                        "minimum": 1,
+                        "maximum": 500,
+                        "examples": [50, 100, 250],
+                    },
+                },
+                "required": [],
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "categories": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "name": {"type": "string"},
+                                "slug": {"type": "string"},
+                            },
+                            "required": ["id", "name"],
+                        },
+                    },
+                    "total_count": {"type": "integer"},
+                    "timestamp": {"type": "string", "format": "date-time"},
+                },
+                "required": ["categories", "total_count", "timestamp"],
+            },
+            **{
+                "_meta": {
+                    "surface": "both",
+                    "queryEligible": True,
+                    "latencyClass": "instant",
+                    "pricing": {"executeUsd": EXECUTE_PRICE_DISCOVERY},
+                    "rateLimit": BACKEND_RATE_LIMIT,
+                },
+            },
+        ),
+
+        # ── Discovery layer: browse inside a category ──────────────────────
+        _tool(
+            name="browse_by_category",
+            description=(
+                "DISCOVERY: List ASINs inside a specific Amazon category, ranked by "
+                "current BSR. Use the `category_id` returned by get_all_categories. "
+                "Returned ASINs are ready inputs for amazon_product_intelligence."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category_id": {
+                        "type": "string",
+                        "description": "Category id or slug from get_all_categories.",
+                        "examples": ["electronics", "home-kitchen", "toys-games"],
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 25,
+                        "minimum": 1,
+                        "maximum": 100,
+                        "examples": [10, 25, 50],
+                    },
+                },
+                "required": ["category_id"],
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "category_id": {"type": "string"},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "asin": {"type": "string"},
+                                "title": {"type": "string"},
+                                "current_bsr": {"type": ["integer", "null"]},
+                                "current_price": {"type": ["number", "null"]},
+                                "current_rating": {"type": ["number", "null"]},
+                            },
+                            "required": ["asin"],
+                        },
+                    },
+                    "total_count": {"type": "integer"},
+                    "timestamp": {"type": "string", "format": "date-time"},
+                },
+                "required": ["category_id", "items", "total_count", "timestamp"],
+            },
+            **{
+                "_meta": {
+                    "surface": "both",
+                    "queryEligible": True,
+                    "latencyClass": "instant",
+                    "pricing": {"executeUsd": EXECUTE_PRICE_DISCOVERY},
+                    "rateLimit": BACKEND_RATE_LIMIT,
+                },
+            },
+        ),
     ]
 
 
-@server.call_tool()
-async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
-    if name != "amazon_product_intelligence":
-        raise ValueError(f"Unknown tool: {name}")
+# ── Tool dispatch ───────────────────────────────────────────────────────────
 
-    identifier = (arguments or {}).get("identifier", "").strip()
+def _err(message: str) -> dict:
+    return {
+        "content": [TextContent(type="text", text=message)],
+        "isError": True,
+    }
 
-    # Normalize to ASIN
-    asin = ""
-    if ASIN_RE.match(identifier.upper()):
-        asin = identifier.upper()
-    elif match := AMAZON_URL_RE.search(identifier):
-        asin = match.group(1).upper()
-    else:
-        return [TextContent(type="text", text="Error: Invalid ASIN or URL format.")]
 
-    url = f"{BACKEND_URL}/v1/product/intelligence"
+def _ok(summary: str, data) -> dict:
+    """Return both a TextContent envelope and the structuredContent the
+    Context Protocol requires for typed downstream consumption."""
+    return {
+        "content": [TextContent(type="text", text=summary)],
+        "structuredContent": data,
+    }
+
+
+async def _call_backend(method: str, path: str, *, json_body: dict | None = None, params: dict | None = None) -> httpx.Response:
+    url = f"{BACKEND_URL}{path}"
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        try:
-            response = await client.post(url, json={"asin": asin})
+        return await client.request(method, url, json=json_body, params=params)
 
-            if response.status_code == 202:
-                return [TextContent(
-                    type="text",
-                    text="This ASIN is being analysed for the first time. Retry in 30 seconds."
-                )]
 
-            if response.status_code == 200:
-                data = response.json()
-                return [
-                    TextContent(type="text", text=json.dumps(data, indent=2)),
-                    EmbeddedContent(type="embedded", data=data)  # structuredContent
-                ]
+def _normalise_asin(identifier: str) -> str | None:
+    identifier = (identifier or "").strip()
+    if ASIN_RE.match(identifier.upper()):
+        return identifier.upper()
+    m = AMAZON_URL_RE.search(identifier)
+    if m:
+        return m.group(1).upper()
+    return None
 
-            return [TextContent(
-                type="text",
-                text=f"Backend Error ({response.status_code}): {response.text}"
-            )]
 
-        except httpx.TimeoutException:
-            return [TextContent(type="text", text="Error: Backend request timed out.")]
-        except Exception as e:
-            return [TextContent(type="text", text=f"Error: {str(e)}")]
+@server.call_tool()
+async def handle_call_tool(name: str, arguments: dict | None) -> dict:
+    arguments = arguments or {}
+
+    try:
+        if name == "amazon_product_intelligence":
+            asin = _normalise_asin(arguments.get("identifier", ""))
+            if not asin:
+                return _err("Error: Invalid ASIN or Amazon URL.")
+            resp = await _call_backend("POST", "/v1/product/intelligence", json_body={"asin": asin})
+            if resp.status_code == 202:
+                return _err("This ASIN is being analysed for the first time. Retry in 30 seconds.")
+            if resp.status_code != 200:
+                return _err(f"Backend error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            summary = data.get("curated_summary") or f"Intelligence report for {asin}."
+            return _ok(summary, data)
+
+        if name == "find_market_opportunities":
+            limit = int(arguments.get("limit", 10))
+            resp = await _call_backend("GET", "/v1/analytics/opportunities/", params={"limit": limit})
+            if resp.status_code != 200:
+                return _err(f"Backend error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            summary = f"Found {data.get('total_count', 0)} underserved niches."
+            return _ok(summary, data)
+
+        if name == "amazon_trending_products":
+            params = {"limit": int(arguments.get("limit", 10))}
+            if "category" in arguments:
+                params["category"] = arguments["category"]
+            resp = await _call_backend("GET", "/v1/analytics/trending/", params=params)
+            if resp.status_code != 200:
+                return _err(f"Backend error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            summary = f"Found {data.get('total_count', 0)} products with rising momentum."
+            return _ok(summary, data)
+
+        if name == "get_bsr_history":
+            asin = _normalise_asin(arguments.get("asin", ""))
+            if not asin:
+                return _err("Error: Invalid ASIN.")
+            days = int(arguments.get("days", 90))
+            resp = await _call_backend("GET", f"/v1/product/{asin}/bsr-history/", params={"days": days})
+            if resp.status_code != 200:
+                return _err(f"Backend error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            summary = f"BSR history for {asin}: {len(data.get('snapshots', []))} daily snapshots over {days}d."
+            return _ok(summary, data)
+
+        if name == "get_all_categories":
+            limit = int(arguments.get("limit", 100))
+            resp = await _call_backend("GET", "/v1/catalog/categories/", params={"limit": limit})
+            if resp.status_code != 200:
+                return _err(f"Backend error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            summary = f"{data.get('total_count', 0)} Amazon categories available."
+            return _ok(summary, data)
+
+        if name == "browse_by_category":
+            category_id = (arguments.get("category_id") or "").strip()
+            if not category_id:
+                return _err("Error: category_id is required.")
+            limit = int(arguments.get("limit", 25))
+            resp = await _call_backend("GET", f"/v1/catalog/categories/{category_id}/items/", params={"limit": limit})
+            if resp.status_code != 200:
+                return _err(f"Backend error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            summary = f"{data.get('total_count', 0)} ASINs in category {category_id}."
+            return _ok(summary, data)
+
+        return _err(f"Unknown tool: {name}")
+
+    except httpx.TimeoutException:
+        return _err("Error: Backend request timed out.")
+    except Exception as exc:  # noqa: BLE001 - surface upstream detail to the agent
+        logger.exception("tool_call_failed", extra={"tool": name})
+        return _err(f"Error: {exc}")
 
 
 # ── SSE HTTP Transport ──────────────────────────────────────────────────────
@@ -159,13 +611,20 @@ def create_app() -> Starlette:
                 )
             except ContextError as e:
                 return JSONResponse(
-                    {"error": f"Unauthorized: {e.message}"}, 
-                    status_code=401
+                    {"error": f"Unauthorized: {e.message}"},
+                    status_code=401,
                 )
         await sse.handle_post_message(request.scope, request.receive, request._send)
 
     async def handle_health(request: Request) -> Response:
-        return Response("ok", media_type="text/plain")
+        return JSONResponse(
+            {
+                "status": "ok",
+                "server": "amazon_intelligence_proxy",
+                "version": "1.0.0",
+                "backend": BACKEND_URL,
+            }
+        )
 
     return Starlette(
         routes=[

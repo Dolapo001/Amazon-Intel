@@ -1,17 +1,20 @@
 """
 API views.
 
-POST /v1/product/intelligence  — primary query endpoint  (PRD §3.1)
-GET  /v1/product/health        — liveness probe
+POST /v1/product/intelligence       — primary query endpoint  (PRD §3.1)
+GET  /v1/product/<asin>/bsr-history — normalised BSR time-series (MCP Tier 2)
+GET  /v1/product/health             — liveness probe
 """
 import logging
+from datetime import date, timedelta
+
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
 from .serializers import ASINQuerySerializer, ProductIntelligenceSerializer
-from .models import ASIN, RevenueEstimate, ReviewAnalysis
+from .models import ASIN, BSRSnapshot, RevenueEstimate, ReviewAnalysis
 from apps.analytics.bsr import compute_bsr_trend
 from apps.analytics.revenue import build_revenue_payload
 from apps.analytics.nlp import get_review_analysis
@@ -140,6 +143,7 @@ class ProductIntelligenceView(APIView):
                 "monthly": int(revenue_payload.get("monthly", 0)),
                 "yoyChange": revenue_payload.get("yoyChange"),
                 "confidence": revenue_payload.get("confidence"),
+                "currency": "USD",
             },
             "sentiment": {
                 "score": sentiment.get("score"),
@@ -155,8 +159,22 @@ class ProductIntelligenceView(APIView):
                 "count": asin_obj.current_review_count,
                 "velocity": sentiment.get("reviewVelocity"),
             },
-            "cacheHit": cache_hit
+            "curated_summary": self._generate_summary(revenue_payload, sentiment, bsr_trend),
+            "data_freshness": self._classify_freshness(asin_obj),
+            "cacheHit": cache_hit,
         }
+
+    def _classify_freshness(self, asin_obj: ASIN) -> str:
+        if not asin_obj.last_ingested_at:
+            return "stale"
+        age = timezone.now() - asin_obj.last_ingested_at
+        if age < timedelta(hours=1):
+            return "real-time"
+        if age < timedelta(hours=24):
+            return "near-real-time"
+        if age < timedelta(days=7):
+            return "cached"
+        return "stale"
 
     def _generate_summary(self, revenue: dict, sentiment: dict, bsr: dict) -> str:
         """
@@ -184,6 +202,51 @@ class ProductIntelligenceView(APIView):
             f"Sentiment: {score:.1f}/5{complaints_str}; "
             f"BSR Trend: {trend.capitalize()}."
         )
+
+
+class BSRHistoryView(APIView):
+    """GET /v1/product/<asin>/bsr-history/ — normalised BSR time-series.
+
+    Used by the MCP Tier-2 `get_bsr_history` tool.
+    """
+
+    def get(self, request, asin_code: str):
+        try:
+            days = int(request.query_params.get("days", 90))
+        except (TypeError, ValueError):
+            days = 90
+        days = max(1, min(days, 730))
+
+        asin_code = asin_code.upper()
+        try:
+            asin_obj = ASIN.objects.get(asin=asin_code)
+        except ASIN.DoesNotExist:
+            return Response(
+                {"error": f"ASIN {asin_code} not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        since = date.today() - timedelta(days=days)
+        snapshots_qs = (
+            BSRSnapshot.objects
+            .filter(asin=asin_obj, date__gte=since)
+            .order_by("date")
+            .values("date", "bsr_rank", "price")
+        )
+        snapshots = [
+            {
+                "date": row["date"].isoformat(),
+                "bsr": row["bsr_rank"],
+                "price": float(row["price"]) if row["price"] is not None else None,
+            }
+            for row in snapshots_qs
+        ]
+        return Response({
+            "asin": asin_code,
+            "days": days,
+            "snapshots": snapshots,
+            "timestamp": timezone.now().isoformat(),
+        })
 
 
 class HealthCheckView(APIView):
