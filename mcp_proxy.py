@@ -520,7 +520,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
 
         if name == "find_market_opportunities":
             limit = int(arguments.get("limit", 10))
-            resp = await _call_backend("GET", "/v1/analytics/opportunities", params={"limit": limit})
+            resp = await _call_backend("GET", "/v1/analytics/opportunities/", params={"limit": limit})
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
@@ -531,7 +531,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             params = {"limit": int(arguments.get("limit", 10))}
             if "category" in arguments:
                 params["category"] = arguments["category"]
-            resp = await _call_backend("GET", "/v1/analytics/trending", params=params)
+            resp = await _call_backend("GET", "/v1/analytics/trending/", params=params)
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
@@ -543,7 +543,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             if not asin:
                 return _err("Error: Invalid ASIN.")
             days = int(arguments.get("days", 90))
-            resp = await _call_backend("GET", f"/v1/product/{asin}/bsr-history", params={"days": days})
+            resp = await _call_backend("GET", f"/v1/product/{asin}/bsr-history/", params={"days": days})
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
@@ -552,7 +552,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
 
         if name == "get_all_categories":
             limit = int(arguments.get("limit", 100))
-            resp = await _call_backend("GET", "/v1/catalog/categories", params={"limit": limit})
+            resp = await _call_backend("GET", "/v1/catalog/categories/", params={"limit": limit})
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
@@ -564,7 +564,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             if not category_id:
                 return _err("Error: category_id is required.")
             limit = int(arguments.get("limit", 25))
-            resp = await _call_backend("GET", f"/v1/catalog/categories/{category_id}/items", params={"limit": limit})
+            resp = await _call_backend("GET", f"/v1/catalog/categories/{category_id}/items/", params={"limit": limit})
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
