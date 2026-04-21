@@ -113,7 +113,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5434:5432"
+      - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -128,7 +128,7 @@ services:
     image: redis:7-alpine
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     ports:
-      - "6380:6379"
+      - "6382:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -142,8 +142,8 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.4
     ports:
-      - "8124:8123"   # HTTP interface
-      - "9001:9000"   # Native TCP
+      - "8125:8123"   # HTTP interface
+      - "9002:9000"   # Native TCP
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./clickhouse_schema.sql:/docker-entrypoint-initdb.d/schema.sql

@@ -2,8 +2,8 @@
 Celery tasks for data ingestion and model maintenance.
 
 Data sources (post-Keepa removal):
-  Product data + BSR  → Apify junglee/amazon-product-scraper
-  Reviews             → Apify junglee/amazon-reviews-scraper
+  Primary: Rainforest API (Product, BSR, Reviews)
+  Fallback: Apify (via scraper.py)
 
 Task hierarchy:
   refresh_tier_asins         → dispatches per-ASIN ingest sub-tasks  (BSR cadence §11)
@@ -71,7 +71,7 @@ def _ingest_asin_internal(asin_code: str, parallel: bool = True):
     Core pipeline logic: Parallel/Sequential Scraping → Cleaning → NLP → Revenue → BSR.
     Shared by both Celery task and synchronous API calls.
     """
-    from apps.ingestion.scraper import concurrent_fetch, fetch_product, fetch_reviews
+    from apps.ingestion.rainforest import fetch_product, fetch_reviews
     from apps.products.models import ASIN, Category, BSRSnapshot
     from apps.analytics.nlp import analyse_and_persist
     from apps.products.cache import set_cached_intel
@@ -80,13 +80,10 @@ def _ingest_asin_internal(asin_code: str, parallel: bool = True):
 
     logger.info("ingest_pipeline_start", extra={"asin": asin_code})
 
-    # ── 1. Scrape ───────────────────────────────────────────────────────
+    # ── 1. Scrape (Rainforest) ───────────────────────────────────────────
     try:
-        if parallel:
-            product, reviews = concurrent_fetch(asin_code, fast_mode=True)
-        else:
-            # Sequential mode for synchronous calls - safer in some Gunicorn setups
-            product, reviews = fetch_product(asin_code)
+        # Rainforest returns both product and reviews in a single call
+        product, reviews = fetch_product(asin_code)
     except Exception as exc:
         logger.exception("scrape_failed", extra={"asin": asin_code})
         raise exc
@@ -204,7 +201,7 @@ def synchronous_full_ingest(asin_code: str):
     default_retry_delay=300,
 )
 def fetch_and_analyse_reviews(self, asin_code: str, max_count: int = 100):
-    from apps.ingestion.scraper import fetch_reviews
+    from apps.ingestion.rainforest import fetch_reviews
     from apps.products.models import ASIN
     from apps.analytics.nlp import analyse_and_persist
     from apps.products.cache import invalidate_intel

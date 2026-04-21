@@ -158,6 +158,7 @@ REST_FRAMEWORK = {
 
 # ── Third-party API Keys ───────────────────────────────────────────────────────
 APIFY_API_KEY = env("APIFY_API_KEY", default="")
+RAINFOREST_API_KEY = env("RAINFOREST_API_KEY", default="")
 
 # ── NLP / ML Model Config ────────────────────────────────────────────────────
 NLP_SENTIMENT_MODEL = env("NLP_SENTIMENT_MODEL", default="cardiffnlp/twitter-roberta-base-sentiment-latest")

@@ -352,3 +352,41 @@ class TestApifyClient:
         assert _parse_price_str("$39.99") == 39.99
         assert _parse_price_str("29") == 29.0
         assert _parse_price_str("invalid") is None
+
+
+class TestRainforestClient:
+    """Smoke tests for the Rainforest API parser."""
+
+    def test_parse_product_bsr_as_list(self):
+        from apps.ingestion.rainforest import _parse_product
+        item = {
+            "asin": "B09XYZ1234",
+            "title": "Test Speaker",
+            "brand": "TestBrand",
+            "bestsellers_rank": [{"rank": 1450, "category": "Electronics"}],
+            "price": {"value": 39.99, "currency": "USD"},
+            "rating": 4.2,
+            "ratings_total": 3200,
+            "main_image": {"link": "https://example.com/img.jpg"},
+            "categories": [{"name": "Electronics"}],
+        }
+        result = _parse_product(item)
+        assert result["asin"] == "B09XYZ1234"
+        assert result["current_bsr"] == 1450
+        assert result["current_price"] == 39.99
+        assert result["current_rating"] == 4.2
+        assert result["current_review_count"] == 3200
+        assert result["category_id"] == "electronics"
+
+    def test_parse_review_normalises_rating(self):
+        from apps.ingestion.rainforest import _parse_review
+        item = {
+            "body": "Great product!",
+            "rating": 4,
+            "verified_purchase": True,
+            "date": {"utc": "2023-01-01T12:00:00Z"}
+        }
+        result = _parse_review(item)
+        assert result["rating"] == 4
+        assert result["verified"] is True
+        assert "2023-01-01" in result["date"]
