@@ -1,0 +1,47 @@
+# Virtual environments - CRITICAL: never send to Docker
+venv/
+env/
+.venv/
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Coverage & test artifacts
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker files themselves (not needed in image)
+Dockerfile*
+docker-compose*.yml
+
+# Logs
+*.log
+
+# Node (if any)
+node_modules/
+
+# Static files collected locally
+staticfiles/

@@ -54,7 +54,7 @@ def fetch_product(asin: str, country: str = "US") -> tuple[Optional[dict], list[
         parsed_product = _parse_product(product_data)
         
         # Parse reviews if present
-        raw_reviews = data.get("reviews", [])
+        raw_reviews = product_data.get("top_reviews") or product_data.get("reviews") or data.get("reviews", [])
         parsed_reviews = [_parse_review(r) for r in raw_reviews]
 
         return parsed_product, parsed_reviews
@@ -82,17 +82,22 @@ def fetch_reviews(asin: str, max_count: int = 100, country: str = "US") -> list[
     }
 
     results = []
-    try:
-        # Simple single-page fetch for now. Rainforest supports pagination.
-        resp = _CLIENT.get(_BASE_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        raw_reviews = data.get("reviews", [])
-        results = [_parse_review(r) for r in raw_reviews]
-        
-    except Exception as exc:
-        logger.error(f"Rainforest fetch_reviews error (asin={asin}): {exc}")
+    import time
+    for attempt in range(3):
+        try:
+            resp = _CLIENT.get(_BASE_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            raw_reviews = data.get("reviews", [])
+            results = [_parse_review(r) for r in raw_reviews]
+            if results:
+                break
+        except Exception as exc:
+            if attempt == 2:
+                logger.error(f"Rainforest fetch_reviews error (asin={asin}): {exc}")
+            else:
+                time.sleep(1)
 
     return results[:max_count]
 
@@ -168,8 +173,11 @@ def _parse_review(item: dict) -> dict:
     """
     Normalise Rainforest review JSON.
     """
+    # Rainforest sometimes uses 'body', sometimes 'text', sometimes 'title' as fallback
+    text = item.get("body") or item.get("text") or item.get("title") or ""
+    
     return {
-        "text":     item.get("body") or item.get("text", ""),
+        "text":     text,
         "rating":   int(item.get("rating", 3)),
         "date":     item.get("date", {}).get("utc") or item.get("date", ""),
         "verified": bool(item.get("verified_purchase", False)),

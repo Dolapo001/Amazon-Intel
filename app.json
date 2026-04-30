@@ -1,0 +1,94 @@
+{
+  "name": "Amazon Intel",
+  "description": "Amazon market intelligence platform — Django backend with Celery workers.",
+  "keywords": ["python", "django", "celery", "redis", "postgres"],
+  "repository": "",
+  "logo": "",
+  "success_url": "/health/",
+  "scripts": {
+    "postdeploy": "python manage.py migrate --noinput"
+  },
+  "env": {
+    "DJANGO_SECRET_KEY": {
+      "description": "A long, random secret key for Django.",
+      "generator": "secret"
+    },
+    "DJANGO_DEBUG": {
+      "description": "Set to False in production.",
+      "value": "False"
+    },
+    "ALLOWED_HOSTS": {
+      "description": "Comma-separated list of allowed hosts. Heroku sets this to your .herokuapp.com domain.",
+      "value": ".herokuapp.com"
+    },
+    "DJANGO_SETTINGS_MODULE": {
+      "description": "Django settings module to use.",
+      "value": "config.settings.production"
+    },
+    "CORS_ALLOWED_ORIGINS": {
+      "description": "Comma-separated list of allowed CORS origins.",
+      "value": ""
+    },
+    "CLICKHOUSE_HOST": {
+      "description": "ClickHouse server host (leave blank if not using ClickHouse).",
+      "value": ""
+    },
+    "CLICKHOUSE_PORT": {
+      "description": "ClickHouse native TCP port.",
+      "value": "9440"
+    },
+    "CLICKHOUSE_DB": {
+      "description": "ClickHouse database name.",
+      "value": "amazon_intel"
+    },
+    "CLICKHOUSE_USER": {
+      "description": "ClickHouse username.",
+      "value": "default"
+    },
+    "CLICKHOUSE_PASSWORD": {
+      "description": "ClickHouse password.",
+      "value": ""
+    },
+    "APIFY_API_KEY": {
+      "description": "Apify API token for Amazon product scraping.",
+      "value": ""
+    },
+    "RAINFOREST_API_KEY": {
+      "description": "Rainforest API key (alternative scraper).",
+      "value": ""
+    },
+    "SENTRY_DSN": {
+      "description": "Sentry DSN for error tracking (optional).",
+      "value": ""
+    }
+  },
+  "addons": [
+    {
+      "plan": "heroku-postgresql:essential-0",
+      "as": "DATABASE"
+    },
+    {
+      "plan": "heroku-redis:mini",
+      "as": "REDIS"
+    }
+  ],
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    },
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    },
+    "beat": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  }
+}

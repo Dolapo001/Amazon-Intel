@@ -55,26 +55,20 @@ class ProductIntelligenceView(APIView):
             logger.info("cache_hit", extra={"asin": asin_code})
             return Response(cached)
 
-        # ── 3. DB lookup & assembly ────────────────────────────────────────
+        # ── 3. Force fresh ingestion (Always skip DB check per user request) ──
+        invalidate_intel(asin_code)
+        logger.info("force_sync_ingest_start", extra={"asin": asin_code})
+        from apps.ingestion.tasks import synchronous_full_ingest
         try:
-            asin_obj = ASIN.objects.select_related(
-                "category", "revenue_estimate", "review_analysis"
-            ).get(asin=asin_code)
-        except ASIN.DoesNotExist:
-            # NEW ASIN: clear any stale placeholder cache, then do synchronous ingest
-            invalidate_intel(asin_code)
-            logger.info("new_asin_sync_ingest_start", extra={"asin": asin_code})
-            from apps.ingestion.tasks import synchronous_full_ingest
-            try:
-                # This will block but concurrent_fetch makes it fast (~5s usually)
-                asin_obj = synchronous_full_ingest(asin_code)
-                logger.info("new_asin_sync_ingest_complete", extra={"asin": asin_code})
-            except Exception:
-                logger.exception("sync_ingest_failed", extra={"asin": asin_code})
-                return Response(
-                    {"error": f"Failed to fetch data for ASIN {asin_code}. Please verify the ASIN and try again."},
-                    status=status.HTTP_404_NOT_FOUND
-                )
+            # This will block but concurrent_fetch makes it fast (~5s usually)
+            asin_obj = synchronous_full_ingest(asin_code)
+            logger.info("force_sync_ingest_complete", extra={"asin": asin_code})
+        except Exception:
+            logger.exception("sync_ingest_failed", extra={"asin": asin_code})
+            return Response(
+                {"error": f"Failed to fetch fresh data for ASIN {asin_code}. Please verify the ASIN and try again."},
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         # Increment query counter and promote tier if warranted
         ASIN.objects.filter(pk=asin_obj.pk).update(query_count=asin_obj.query_count + 1)
@@ -221,10 +215,16 @@ class BSRHistoryView(APIView):
         try:
             asin_obj = ASIN.objects.get(asin=asin_code)
         except ASIN.DoesNotExist:
-            return Response(
-                {"error": f"ASIN {asin_code} not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            # If ASIN doesn't exist, trigger a synchronous ingest to populate initial data
+            logger.info("history_request_missing_asin_ingest", extra={"asin": asin_code})
+            from apps.ingestion.tasks import synchronous_full_ingest
+            try:
+                asin_obj = synchronous_full_ingest(asin_code)
+            except Exception:
+                return Response(
+                    {"error": f"ASIN {asin_code} not found and ingestion failed."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
         since = date.today() - timedelta(days=days)
         snapshots_qs = (

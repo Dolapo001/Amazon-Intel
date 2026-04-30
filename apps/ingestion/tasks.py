@@ -82,8 +82,13 @@ def _ingest_asin_internal(asin_code: str, parallel: bool = True):
 
     # ── 1. Scrape (Rainforest) ───────────────────────────────────────────
     try:
-        # Rainforest returns both product and reviews in a single call
-        product, reviews = fetch_product(asin_code)
+        # Fetch product metadata and any immediate reviews
+        product, product_reviews = fetch_product(asin_code)
+        
+        # Try to fetch dedicated reviews for better NLP (Dedicated endpoint is higher quality)
+        # Fallback to product-level reviews if dedicated fetch fails or is throttled
+        dedicated_reviews = fetch_reviews(asin_code, max_count=50)
+        reviews = dedicated_reviews if dedicated_reviews else product_reviews
     except Exception as exc:
         logger.exception("scrape_failed", extra={"asin": asin_code})
         raise exc
