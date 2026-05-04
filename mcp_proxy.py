@@ -611,19 +611,33 @@ def create_app() -> Starlette:
                 ),
             )
 
-    async def handle_messages(request: Request) -> Response:
-        body = await request.json()
+    async def handle_messages(scope, receive, send):
+        request = Request(scope, receive, send)
+        body_bytes = await request.body()
+        try:
+            import json
+            body = json.loads(body_bytes)
+        except Exception:
+            body = {}
+
         if _HAS_CTX and is_protected_mcp_method(body.get("method", "")):
             try:
                 await verify_context_request(
                     authorization_header=request.headers.get("authorization", "")
                 )
             except ContextError as e:
-                return JSONResponse(
+                response = JSONResponse(
                     {"error": f"Unauthorized: {e.message}"},
                     status_code=401,
                 )
-        await sse.handle_post_message(request.scope, request.receive, request._send)
+                await response(scope, receive, send)
+                return
+
+        # Re-inject the consumed body so the SDK can read it
+        async def fake_receive():
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+        await sse.handle_post_message(scope, fake_receive, send)
 
     async def handle_health(request: Request) -> Response:
         return JSONResponse(
@@ -635,13 +649,25 @@ def create_app() -> Starlette:
             }
         )
 
-    return Starlette(
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
+
+    app = Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
             Route("/messages", endpoint=handle_messages, methods=["POST"]),
             Route("/health", endpoint=handle_health),
+        ],
+        middleware=[
+            Middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
         ]
     )
+    return app
 
 
 if __name__ == "__main__":
