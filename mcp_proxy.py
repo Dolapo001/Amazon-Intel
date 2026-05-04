@@ -620,8 +620,15 @@ def create_app() -> Starlette:
         except Exception as e:
             # If the proxy fails to parse the client's JSON, return an error with the raw bytes so we can debug
             from starlette.responses import JSONResponse
+            # Convert headers to strings so they are JSON serializable
+            str_headers = {k.decode("utf-8", "ignore"): v.decode("utf-8", "ignore") for k, v in scope.get("headers", [])}
             response = JSONResponse(
-                {"error": f"Proxy JSON Parse Error: {e}", "raw_body": str(body_bytes[:200])},
+                {
+                    "error": f"Proxy JSON Parse Error: {e}", 
+                    "raw_body": str(body_bytes[:200]),
+                    "method": scope.get("method"),
+                    "headers": str_headers
+                },
                 status_code=400,
             )
             await response(scope, receive, send)
