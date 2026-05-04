@@ -168,6 +168,8 @@ def _ingest_asin_internal(asin_code: str, parallel: bool = True):
                 "count": asin_obj.current_review_count,
                 "velocity": sentiment.get("reviewVelocity"),
             },
+            "curated_summary": _generate_summary(revenue_payload, sentiment, bsr_trend),
+            "data_freshness": "real-time",
             "cacheHit": False
         }
         set_cached_intel(asin_code, final_payload, tier=asin_obj.tier)
@@ -231,6 +233,29 @@ def fetch_and_analyse_reviews(self, asin_code: str, max_count: int = 100):
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _generate_summary(revenue: dict, sentiment: dict, bsr: dict) -> str:
+    """Rule-based natural language summary."""
+    monthly = revenue.get("monthly", 0) or 0
+    yoy = revenue.get("yoyChange")
+    score = sentiment.get("score") or 0
+    neg_themes = sentiment.get("negativeThemes", [])
+    trend = bsr.get("trend", "stable") or "stable"
+
+    rev_str = f"${monthly:,.0f}/mo"
+    if yoy is not None:
+        direction = "up" if yoy >= 0 else "down"
+        rev_str += f" ({direction} {abs(yoy):.0f}%)"
+
+    complaints_str = ""
+    if neg_themes:
+        complaints_str = f", top complaints: {', '.join(neg_themes[:2])}"
+
+    return (
+        f"Estimated Revenue: {rev_str}; "
+        f"Sentiment: {score:.1f}/5{complaints_str}; "
+        f"BSR Trend: {trend.capitalize()}."
+    )
 
 def _persist_bsr_to_clickhouse(asin_code: str, bsr_rank):
     if not bsr_rank: return

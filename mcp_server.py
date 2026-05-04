@@ -133,7 +133,8 @@ def find_market_opportunities(limit: int = 10) -> dict:
     Args:
         limit: Number of niches to return (1–50).
     """
-    calculate_opportunity_scores()
+    # Scores are pre-computed by the Celery task `calculate_opportunity_scores`.
+    # Do NOT recompute here — it triggers full DB aggregation on every call.
     scores = OpportunityScore.objects.all().order_by("-total_score")[: max(1, min(limit, 50))]
 
     opportunities = [
