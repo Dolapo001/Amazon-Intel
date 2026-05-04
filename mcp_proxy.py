@@ -637,7 +637,11 @@ def create_app() -> Starlette:
         async def fake_receive():
             return {"type": "http.request", "body": body_bytes, "more_body": False}
 
-        await sse.handle_post_message(scope, fake_receive, send)
+        # Mount strips the prefix, but SseServerTransport expects the path to be exactly "/messages"
+        new_scope = dict(scope)
+        new_scope["path"] = "/messages"
+        
+        await sse.handle_post_message(new_scope, fake_receive, send)
 
     async def handle_health(request: Request) -> Response:
         return JSONResponse(
@@ -649,13 +653,14 @@ def create_app() -> Starlette:
             }
         )
 
+    from starlette.routing import Route, Mount
     from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
 
     app = Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
-            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+            Mount("/messages", app=handle_messages),
             Route("/health", endpoint=handle_health),
         ],
         middleware=[
