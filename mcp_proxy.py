@@ -597,20 +597,22 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
 def create_app() -> Starlette:
     sse = SseServerTransport("/messages")
 
-    async def handle_sse(scope, receive, send):
-        async with sse.connect_sse(scope, receive, send) as streams:
-            await server.run(
-                streams[0],
-                streams[1],
-                InitializationOptions(
-                    server_name="amazon_intelligence_proxy",
-                    server_version="1.0.0",
-                    capabilities=server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={},
+    class SSEApp:
+        """Raw ASGI app to bridge MCP SDK with Starlette routing."""
+        async def __call__(self, scope, receive, send):
+            async with sse.connect_sse(scope, receive, send) as streams:
+                await server.run(
+                    streams[0],
+                    streams[1],
+                    InitializationOptions(
+                        server_name="amazon_intelligence_proxy",
+                        server_version="1.0.0",
+                        capabilities=server.get_capabilities(
+                            notification_options=NotificationOptions(),
+                            experimental_capabilities={},
+                        ),
                     ),
-                ),
-            )
+                )
 
     import uuid
     from mcp.shared.message import ServerMessageMetadata, SessionMessage
@@ -685,7 +687,7 @@ def create_app() -> Starlette:
 
     app = Starlette(
         routes=[
-            Route("/sse", endpoint=handle_sse),
+            Route("/sse", endpoint=SSEApp()),
             Route("/messages", endpoint=handle_messages, methods=["POST"]),
             Route("/messages/", endpoint=handle_messages, methods=["POST"]),
             Route("/health", endpoint=handle_health),
