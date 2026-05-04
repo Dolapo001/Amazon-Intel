@@ -617,8 +617,15 @@ def create_app() -> Starlette:
         try:
             import json
             body = json.loads(body_bytes)
-        except Exception:
-            body = {}
+        except Exception as e:
+            # If the proxy fails to parse the client's JSON, return an error with the raw bytes so we can debug
+            from starlette.responses import JSONResponse
+            response = JSONResponse(
+                {"error": f"Proxy JSON Parse Error: {e}", "raw_body": str(body_bytes[:200])},
+                status_code=400,
+            )
+            await response(scope, receive, send)
+            return
 
         if _HAS_CTX and is_protected_mcp_method(body.get("method", "")):
             try:
@@ -633,9 +640,17 @@ def create_app() -> Starlette:
                 await response(scope, receive, send)
                 return
 
-        # Re-inject the consumed body so the SDK can read it
+        # Re-inject the consumed body so the SDK can read it exactly once
+        chunk_yielded = False
         async def fake_receive():
-            return {"type": "http.request", "body": body_bytes, "more_body": False}
+            nonlocal chunk_yielded
+            if not chunk_yielded:
+                chunk_yielded = True
+                return {"type": "http.request", "body": body_bytes, "more_body": False}
+            # A correct ASGI receive block waits for disconnect after the body is done
+            import asyncio
+            await asyncio.Event().wait()
+            return {"type": "http.disconnect"}
 
         # Mount strips the prefix, but SseServerTransport expects the path to be exactly "/messages"
         new_scope = dict(scope)
