@@ -656,7 +656,9 @@ def create_app() -> Starlette:
 
         # 4. Parse MCP Message
         try:
-            message = types.jsonrpc_message_adapter.validate_json(body_bytes, by_name=False)
+            from pydantic import TypeAdapter
+            adapter = TypeAdapter(types.JSONRPCMessage)
+            message = adapter.validate_json(body_bytes)
         except Exception as err:
             return Response(f"Could not parse message: {err}", status_code=400)
 
