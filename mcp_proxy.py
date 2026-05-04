@@ -641,6 +641,22 @@ def create_app() -> Starlette:
         new_scope = dict(scope)
         new_scope["path"] = "/messages"
         
+        # The MCP SDK strictly validates Content-Type. Since we already verified 
+        # it parses as JSON, we force the header to bypass the SDK's strict check.
+        headers = []
+        has_content_type = False
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"content-type":
+                headers.append((b"content-type", b"application/json"))
+                has_content_type = True
+            else:
+                headers.append((name, value))
+                
+        if not has_content_type:
+            headers.append((b"content-type", b"application/json"))
+            
+        new_scope["headers"] = headers
+        
         await sse.handle_post_message(new_scope, fake_receive, send)
 
     async def handle_health(request: Request) -> Response:
