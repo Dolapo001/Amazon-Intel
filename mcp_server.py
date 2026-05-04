@@ -52,22 +52,8 @@ DJANGO_RATE_LIMIT = {
 mcp = FastMCP("Amazon Intelligence")
 
 
-class ContextProtocolAuth(Middleware):
-    """Verify Context Protocol JWT on tool calls only."""
-
-    async def on_call_tool(self, context: MiddlewareContext, call_next):
-        headers = get_http_headers()
-        try:
-            await verify_context_request(
-                authorization_header=headers.get("authorization", "")
-            )
-        except ContextError as e:
-            raise ToolError(f"Unauthorized: {e.message}")
-        return await call_next(context)
-
-
-mcp.add_middleware(ContextProtocolAuth())
-
+# The Context Protocol JWT authentication is handled entirely by mcp_proxy.py at the HTTP layer.
+# We do not use FastMCP middleware for auth because JSON-RPC messages do not contain HTTP headers.
 
 # ── Tier 1: Intelligence tools ──────────────────────────────────────────────
 
