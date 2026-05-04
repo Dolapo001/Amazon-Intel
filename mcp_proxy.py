@@ -598,8 +598,10 @@ def create_app() -> Starlette:
     sse = SseServerTransport("/messages")
 
     class SSEApp:
-        """Raw ASGI app to bridge MCP SDK with Starlette routing."""
+        """Raw ASGI app for SSE. Ensures SDK handles the connection natively."""
         async def __call__(self, scope, receive, send):
+            # Ensure path matches what the SDK transport expects
+            scope["path"] = "/sse"
             async with sse.connect_sse(scope, receive, send) as streams:
                 await server.run(
                     streams[0],
@@ -614,72 +616,59 @@ def create_app() -> Starlette:
                     ),
                 )
 
-    import uuid
-    from mcp.shared.message import ServerMessageMetadata, SessionMessage
-    from mcp import types
+    class MessagesApp:
+        """Raw ASGI app for Messages. Handles Auth + Path fixes then delegates to SDK."""
+        async def __call__(self, scope, receive, send):
+            scope["path"] = "/messages"  # Force standard path for SDK transport
+            
+            if scope["method"] == "POST":
+                # 1. Buffer the body so we can inspect it for Auth
+                body = b""
+                while True:
+                    msg = await receive()
+                    body += msg.get("body", b"")
+                    if not msg.get("more_body", False):
+                        break
+                
+                # 2. JWT Verification
+                try:
+                    # Quick JSON parse to check method
+                    payload = json.loads(body)
+                    method = payload.get("method", "")
+                    
+                    if _HAS_CTX and is_protected_mcp_method(method):
+                        auth_header = ""
+                        for k, v in scope["headers"]:
+                            if k.lower() == b"authorization":
+                                auth_header = v.decode("utf-8")
+                                break
+                        await verify_context_request(auth_header)
+                except Exception as e:
+                    # Authentication failed or body malformed
+                    await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"application/json")]})
+                    await send({"type": "http.response.body", "body": json.dumps({"error": str(e)}).encode()})
+                    return
 
-    async def handle_messages(request: Request) -> Response:
-        # Only accept POST requests
-        if request.method != "POST":
-            return Response("Method Not Allowed", status_code=405)
+                # 3. Re-inject body and delegate to SDK's native handler
+                async def re_receive():
+                    return {"type": "http.request", "body": body, "more_body": False}
+                
+                return await sse.handle_post_message(scope, re_receive, send)
 
-        body_bytes = await request.body()
-        try:
-            import json
-            body = json.loads(body_bytes)
-        except Exception as e:
-            str_headers = {k.decode("utf-8", "ignore"): v.decode("utf-8", "ignore") for k, v in request.headers.raw}
-            return JSONResponse({
-                "error": f"Proxy JSON Parse Error: {e}", 
-                "raw_body": str(body_bytes[:200]),
-                "method": request.method,
-                "headers": str_headers
-            }, status_code=400)
+            # Delegate GET/other to SDK (usually 405)
+            return await sse.handle_post_message(scope, receive, send)
 
-        # 1. JWT Verification
-        if _HAS_CTX and is_protected_mcp_method(body.get("method", "")):
-            try:
-                await verify_context_request(request.headers.get("authorization", ""))
-            except ContextError as e:
-                return JSONResponse({"error": f"Unauthorized: {e.message}"}, status_code=401)
-
-        # 2. Extract Session ID
-        session_id_param = request.query_params.get("session_id")
-        if not session_id_param:
-            return Response("session_id is required", status_code=400)
-        try:
-            session_id = uuid.UUID(hex=session_id_param)
-        except ValueError:
-            return Response("Invalid session ID", status_code=400)
-
-        # 3. Retrieve Stream Writer from SDK
-        writer = sse._read_stream_writers.get(session_id)
-        if not writer:
-            return Response("Could not find session", status_code=404)
-
-        # 4. Parse MCP Message
-        try:
-            from pydantic import TypeAdapter
-            adapter = TypeAdapter(types.JSONRPCMessage)
-            message = adapter.validate_json(body_bytes)
-        except Exception as err:
-            return Response(f"Could not parse message: {err}", status_code=400)
-
-        # 5. Push to SDK
-        # We send the unwrapped JSONRPCMessage directly to the server.run loop.
-        await writer.send(message)
-
-        return Response("Accepted", status_code=202)
-
-    async def handle_health(request: Request) -> Response:
-        return JSONResponse(
-            {
-                "status": "ok",
-                "server": "amazon_intelligence_proxy",
-                "version": "1.0.0",
-                "backend": BACKEND_URL,
-            }
-        )
+    async def handle_health(scope, receive, send):
+        """Standard health check."""
+        payload = json.dumps({
+            "status": "ok",
+            "server": "amazon_intelligence_proxy",
+            "version": "1.0.1",
+            "backend": BACKEND_URL,
+            "ctx_enabled": _HAS_CTX
+        }).encode()
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": payload})
 
     from starlette.routing import Route, Mount
     from starlette.middleware import Middleware
@@ -688,8 +677,8 @@ def create_app() -> Starlette:
     app = Starlette(
         routes=[
             Route("/sse", endpoint=SSEApp()),
-            Route("/messages", endpoint=handle_messages, methods=["POST"]),
-            Route("/messages/", endpoint=handle_messages, methods=["POST"]),
+            Route("/messages", endpoint=MessagesApp()),
+            Route("/messages/", endpoint=MessagesApp()),
             Route("/health", endpoint=handle_health),
         ],
         middleware=[
