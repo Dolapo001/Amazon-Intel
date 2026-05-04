@@ -118,7 +118,11 @@ def _ingest_asin_internal(asin_code: str, parallel: bool = True):
         if product.get("current_bsr"):
             BSRSnapshot.objects.update_or_create(
                 asin=asin_obj, date=date.today(),
-                defaults={"bsr_rank": product["current_bsr"]},
+                defaults={
+                    "bsr_rank": product["current_bsr"],
+                    "price": product.get("current_price"),
+                    "category": asin_obj.category,
+                },
             )
         
         _persist_bsr_to_clickhouse(asin_code, product.get("current_bsr"))
@@ -235,19 +239,21 @@ def _persist_bsr_to_clickhouse(asin_code: str, bsr_rank):
         from django.conf import settings
         from clickhouse_driver import Client
 
+        ch_settings = settings.CLICKHOUSE
         ch = Client(
-            host=settings.CLICKHOUSE["host"],
-            port=settings.CLICKHOUSE["port"],
-            database=settings.CLICKHOUSE["database"],
-            user=settings.CLICKHOUSE["user"],
-            password=settings.CLICKHOUSE["password"],
+            host=ch_settings["host"],
+            port=ch_settings["port"],
+            database=ch_settings["database"],
+            user=ch_settings["user"],
+            password=ch_settings["password"],
+            secure=ch_settings["port"] == 9440,  # SSL for ClickHouse Cloud
         )
         ch.execute(
             "INSERT INTO bsr_timeseries (asin, timestamp, bsr_rank) VALUES",
             [(asin_code, datetime.now(tz=tz.utc), int(bsr_rank))],
         )
     except Exception:
-        pass
+        logger.warning("clickhouse_persist_failed", extra={"asin": asin_code}, exc_info=True)
 
 
 @shared_task(name="apps.analytics.tasks.retrain_revenue_model", bind=True)
