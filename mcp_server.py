@@ -151,7 +151,7 @@ def find_market_opportunities(limit: int = 10) -> dict:
         "rateLimit": DJANGO_RATE_LIMIT,
     },
 )
-def get_trending_products(limit: int = 10) -> dict:
+def get_trending_products(limit: int = 10, category: str = None) -> dict:
     """TIER 1 INTELLIGENCE: Products with rising BSR momentum.
 
     Returns ASINs experiencing rapid BSR improvement ranked by velocity score.

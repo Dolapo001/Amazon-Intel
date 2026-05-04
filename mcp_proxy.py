@@ -654,15 +654,21 @@ def create_app() -> Starlette:
                     if not msg.get("more_body", False):
                         break
                 
-                # 2. JWT Verification & Payload Cleanup
+                # 2. JSON-RPC Payload Cleanup
                 try:
-                    # Quick JSON parse to check method and clean metadata
                     payload = json.loads(body)
                     
-                    # Strip _meta from params if present to avoid Pydantic validation errors
-                    # in strict SDK versions that don't recognize progress tokens yet.
-                    if "params" in payload and isinstance(payload["params"], dict):
-                        payload["params"].pop("_meta", None)
+                    def clean_meta(obj):
+                        if isinstance(obj, dict):
+                            obj.pop("_meta", None)
+                            # Some clients also send 'notifications' or other extra fields
+                            for v in obj.values():
+                                clean_meta(v)
+                        elif isinstance(obj, list):
+                            for item in obj:
+                                clean_meta(item)
+
+                    clean_meta(payload)
                     
                     # Update body with cleaned payload
                     body = json.dumps(payload).encode()
