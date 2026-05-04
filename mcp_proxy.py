@@ -611,75 +611,61 @@ def create_app() -> Starlette:
                 ),
             )
 
-    async def handle_messages(scope, receive, send):
-        request = Request(scope, receive, send)
+    import uuid
+    from mcp.shared.message import ServerMessageMetadata, SessionMessage
+    from mcp import types
+
+    async def handle_messages(request: Request) -> Response:
+        # Only accept POST requests
+        if request.method != "POST":
+            return Response("Method Not Allowed", status_code=405)
+
         body_bytes = await request.body()
         try:
             import json
             body = json.loads(body_bytes)
         except Exception as e:
-            # If the proxy fails to parse the client's JSON, return an error with the raw bytes so we can debug
-            from starlette.responses import JSONResponse
-            # Convert headers to strings so they are JSON serializable
-            str_headers = {k.decode("utf-8", "ignore"): v.decode("utf-8", "ignore") for k, v in scope.get("headers", [])}
-            response = JSONResponse(
-                {
-                    "error": f"Proxy JSON Parse Error: {e}", 
-                    "raw_body": str(body_bytes[:200]),
-                    "method": scope.get("method"),
-                    "headers": str_headers
-                },
-                status_code=400,
-            )
-            await response(scope, receive, send)
-            return
+            str_headers = {k.decode("utf-8", "ignore"): v.decode("utf-8", "ignore") for k, v in request.headers.raw}
+            return JSONResponse({
+                "error": f"Proxy JSON Parse Error: {e}", 
+                "raw_body": str(body_bytes[:200]),
+                "method": request.method,
+                "headers": str_headers
+            }, status_code=400)
 
+        # 1. JWT Verification
         if _HAS_CTX and is_protected_mcp_method(body.get("method", "")):
             try:
-                await verify_context_request(
-                    authorization_header=request.headers.get("authorization", "")
-                )
+                await verify_context_request(request.headers.get("authorization", ""))
             except ContextError as e:
-                response = JSONResponse(
-                    {"error": f"Unauthorized: {e.message}"},
-                    status_code=401,
-                )
-                await response(scope, receive, send)
-                return
+                return JSONResponse({"error": f"Unauthorized: {e.message}"}, status_code=401)
 
-        # Re-inject the consumed body so the SDK can read it exactly once
-        chunk_yielded = False
-        async def fake_receive():
-            nonlocal chunk_yielded
-            if not chunk_yielded:
-                chunk_yielded = True
-                return {"type": "http.request", "body": body_bytes, "more_body": False}
-            # A correct ASGI receive block waits for disconnect after the body is done
-            import asyncio
-            await asyncio.Event().wait()
-            return {"type": "http.disconnect"}
+        # 2. Extract Session ID
+        session_id_param = request.query_params.get("session_id")
+        if not session_id_param:
+            return Response("session_id is required", status_code=400)
+        try:
+            session_id = uuid.UUID(hex=session_id_param)
+        except ValueError:
+            return Response("Invalid session ID", status_code=400)
 
-        # Mount strips the prefix, but SseServerTransport expects the path to be exactly "/messages"
-        new_scope = dict(scope)
-        new_scope["path"] = "/messages"
-        
-        # The MCP SDK strictly validates Content-Type. Since we already verified 
-        # it parses as JSON, we force the header to bypass the SDK's strict check.
-        headers = []
-        has_content_type = False
-        for name, value in scope.get("headers", []):
-            if name.lower() == b"content-type":
-                headers.append((b"content-type", b"application/json"))
-                has_content_type = True
-            else:
-                headers.append((name, value))
-                
-        if not has_content_type:
-            headers.append((b"content-type", b"application/json"))
-            
-        new_scope["headers"] = headers
-        
-        await sse.handle_post_message(new_scope, fake_receive, send)
+        # 3. Retrieve Stream Writer from SDK
+        writer = sse._read_stream_writers.get(session_id)
+        if not writer:
+            return Response("Could not find session", status_code=404)
+
+        # 4. Parse MCP Message
+        try:
+            message = types.jsonrpc_message_adapter.validate_json(body_bytes, by_name=False)
+        except Exception as err:
+            return Response(f"Could not parse message: {err}", status_code=400)
+
+        # 5. Push to SDK
+        metadata = ServerMessageMetadata(request_context=request)
+        session_message = SessionMessage(message, metadata=metadata)
+        await writer.send(session_message)
+
+        return Response("Accepted", status_code=202)
 
     async def handle_health(request: Request) -> Response:
         return JSONResponse(
@@ -698,7 +684,7 @@ def create_app() -> Starlette:
     app = Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
-            Mount("/messages", app=handle_messages),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
             Route("/health", endpoint=handle_health),
         ],
         middleware=[
