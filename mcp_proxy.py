@@ -35,7 +35,10 @@ from starlette.routing import Route
 # (useful for local testing; must be installed for production marketplace use)
 try:
     from ctxprotocol import ContextError, is_protected_mcp_method, verify_context_request
-    _HAS_CTX = True
+    # Allow disabling auth via env var for testing (e.g. MCP Inspector)
+    _HAS_CTX = os.getenv("DISABLE_AUTH") != "1"
+    if not _HAS_CTX:
+        logging.warning("DISABLE_AUTH=1 detected — JWT verification disabled")
 except ImportError:
     _HAS_CTX = False
     logging.warning("ctxprotocol not installed — JWT verification disabled")
