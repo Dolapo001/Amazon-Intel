@@ -2,14 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
-RUN pip install --no-cache-dir \
-      "fastmcp" \
-      "ctxprotocol" \
-      "httpx" \
-      "uvicorn" \
-      "starlette"
-
+# Install dependencies from requirements file (keeps versions in sync)
+COPY requirements.mcp.txt .
+RUN pip install --no-cache-dir -r requirements.mcp.txt
 
 # Copy proxy script
 COPY mcp_proxy.py .
@@ -17,6 +12,11 @@ COPY mcp_proxy.py .
 # Environment Defaults
 ENV BACKEND_URL=http://web:5000
 ENV PORT=3000
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD python -c "import httpx; httpx.get('http://localhost:${PORT}/health').raise_for_status()" || exit 1
 
 # Run mcp server
 ENTRYPOINT ["python", "mcp_proxy.py"]
