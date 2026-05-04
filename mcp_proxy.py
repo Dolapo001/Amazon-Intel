@@ -487,13 +487,21 @@ def _err(message: str) -> dict:
     }
 
 
-def _ok(summary: str, data) -> dict:
-    """Return both a TextContent envelope and the structuredContent the
-    Context Protocol requires for typed downstream consumption."""
-    return {
+def _ok(summary: str, data: dict) -> dict:
+    """Return an MCP result that satisfies both standard and Context Protocol requirements.
+
+    1. `content`: Standard MCP TextContent (what the agent sees).
+    2. `structuredContent`: Context Protocol requirement for typed data.
+    3. `**data`: Merge keys into the root so the `outputSchema` validation passes.
+    """
+    res = {
         "content": [{"type": "text", "text": summary}],
         "structuredContent": data,
     }
+    # Merge keys to the root to satisfy outputSchema 'required' property checks
+    if isinstance(data, dict):
+        res.update(data)
+    return res
 
 
 async def _call_backend(method: str, path: str, *, json_body: dict | None = None, params: dict | None = None) -> httpx.Response:
@@ -536,6 +544,9 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
+            if "timestamp" not in data:
+                from datetime import datetime, timezone
+                data["timestamp"] = datetime.now(timezone.utc).isoformat()
             summary = f"Found {data.get('total_count', 0)} underserved niches."
             return _ok(summary, data)
 
@@ -547,6 +558,9 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
+            if "timestamp" not in data:
+                from datetime import datetime, timezone
+                data["timestamp"] = datetime.now(timezone.utc).isoformat()
             summary = f"Found {data.get('total_count', 0)} products with rising momentum."
             return _ok(summary, data)
 
@@ -559,6 +573,9 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
+            if "timestamp" not in data:
+                from datetime import datetime, timezone
+                data["timestamp"] = datetime.now(timezone.utc).isoformat()
             summary = f"BSR history for {asin}: {len(data.get('snapshots', []))} daily snapshots over {days}d."
             return _ok(summary, data)
 
@@ -568,6 +585,9 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
+            if "timestamp" not in data:
+                from datetime import datetime, timezone
+                data["timestamp"] = datetime.now(timezone.utc).isoformat()
             summary = f"{data.get('total_count', 0)} Amazon categories available."
             return _ok(summary, data)
 
@@ -580,6 +600,10 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             if resp.status_code != 200:
                 return _err(f"Backend error ({resp.status_code}): {resp.text}")
             data = resp.json()
+            # Ensure timestamp is present for schema compliance if backend missed it
+            if "timestamp" not in data:
+                from datetime import datetime, timezone
+                data["timestamp"] = datetime.now(timezone.utc).isoformat()
             summary = f"{data.get('total_count', 0)} ASINs in category {category_id}."
             return _ok(summary, data)
 

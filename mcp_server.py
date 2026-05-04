@@ -123,6 +123,7 @@ def find_market_opportunities(limit: int = 10) -> dict:
     # Do NOT recompute here — it triggers full DB aggregation on every call.
     scores = OpportunityScore.objects.all().order_by("-total_score")[: max(1, min(limit, 50))]
 
+    from django.utils import timezone
     opportunities = [
         {
             "niche": s.niche_name,
@@ -134,7 +135,11 @@ def find_market_opportunities(limit: int = 10) -> dict:
         }
         for s in scores
     ]
-    return {"opportunities": opportunities, "total_count": len(opportunities)}
+    return {
+        "opportunities": opportunities,
+        "total_count": len(opportunities),
+        "timestamp": timezone.now().isoformat()
+    }
 
 
 @mcp.tool(
@@ -161,6 +166,7 @@ def get_trending_products(limit: int = 10) -> dict:
         .select_related("asin")
         [: max(1, min(limit, 50))]
     )
+    from django.utils import timezone
     rows = [
         {
             "asin": t.asin.asin,
@@ -171,7 +177,11 @@ def get_trending_products(limit: int = 10) -> dict:
         }
         for t in trending
     ]
-    return {"trending": rows, "total_count": len(rows)}
+    return {
+        "trending": rows,
+        "total_count": len(rows),
+        "timestamp": timezone.now().isoformat()
+    }
 
 
 # ── Discovery layer ─────────────────────────────────────────────────────────
@@ -193,11 +203,16 @@ def get_all_categories(limit: int = 100) -> dict:
     trending/popular items and misses the full surface area.
     """
     qs = Category.objects.all().order_by("name")[: max(1, min(limit, 500))]
+    from django.utils import timezone
     categories = [
         {"id": c.amazon_id, "name": c.name, "slug": c.amazon_id}
         for c in qs
     ]
-    return {"categories": categories, "total_count": len(categories)}
+    return {
+        "categories": categories,
+        "total_count": len(categories),
+        "timestamp": timezone.now().isoformat()
+    }
 
 
 @mcp.tool(
