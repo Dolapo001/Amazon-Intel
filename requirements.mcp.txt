@@ -1,0 +1,6 @@
+# MCP Proxy — lightweight dependencies (no Django needed)
+httpx
+uvicorn[standard]
+starlette
+mcp
+ctxprotocol
