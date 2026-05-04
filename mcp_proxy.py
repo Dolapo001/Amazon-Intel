@@ -597,10 +597,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
 def create_app() -> Starlette:
     sse = SseServerTransport("/messages")
 
-    async def handle_sse(request: Request) -> Response:
-        async with sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
+    async def handle_sse(scope, receive, send):
+        async with sse.connect_sse(scope, receive, send) as streams:
             await server.run(
                 streams[0],
                 streams[1],
