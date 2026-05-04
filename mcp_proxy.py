@@ -18,10 +18,10 @@ import json
 import logging
 import os
 import re
+import sys
 
 import httpx
 import uvicorn
-from ctxprotocol import ContextError, is_protected_mcp_method, verify_context_request
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
@@ -30,6 +30,15 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
+
+# ctxprotocol is optional — if not installed, JWT verification is skipped
+# (useful for local testing; must be installed for production marketplace use)
+try:
+    from ctxprotocol import ContextError, is_protected_mcp_method, verify_context_request
+    _HAS_CTX = True
+except ImportError:
+    _HAS_CTX = False
+    logging.warning("ctxprotocol not installed — JWT verification disabled")
 
 logger = logging.getLogger(__name__)
 
@@ -604,7 +613,7 @@ def create_app() -> Starlette:
 
     async def handle_messages(request: Request) -> Response:
         body = await request.json()
-        if is_protected_mcp_method(body.get("method", "")):
+        if _HAS_CTX and is_protected_mcp_method(body.get("method", "")):
             try:
                 await verify_context_request(
                     authorization_header=request.headers.get("authorization", "")
@@ -636,6 +645,11 @@ def create_app() -> Starlette:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
+    logger.info("Starting Amazon Intelligence MCP Proxy")
+    logger.info(f"  BACKEND_URL = {BACKEND_URL}")
+    logger.info(f"  PORT        = {PORT}")
+    logger.info(f"  ctxprotocol = {'enabled' if _HAS_CTX else 'DISABLED'}")
     app = create_app()
     uvicorn.run(app, host="0.0.0.0", port=PORT)
+
