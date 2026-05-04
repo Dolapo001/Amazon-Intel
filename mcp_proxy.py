@@ -482,7 +482,7 @@ async def handle_list_tools() -> list[Tool]:
 
 def _err(message: str) -> dict:
     return {
-        "content": [TextContent(type="text", text=message)],
+        "content": [{"type": "text", "text": message}],
         "isError": True,
     }
 
@@ -491,7 +491,7 @@ def _ok(summary: str, data) -> dict:
     """Return both a TextContent envelope and the structuredContent the
     Context Protocol requires for typed downstream consumption."""
     return {
-        "content": [TextContent(type="text", text=summary)],
+        "content": [{"type": "text", "text": summary}],
         "structuredContent": data,
     }
 
