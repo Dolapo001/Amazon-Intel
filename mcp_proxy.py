@@ -630,12 +630,20 @@ def create_app() -> Starlette:
                     if not msg.get("more_body", False):
                         break
                 
-                # 2. JWT Verification
+                # 2. JWT Verification & Payload Cleanup
                 try:
-                    # Quick JSON parse to check method
+                    # Quick JSON parse to check method and clean metadata
                     payload = json.loads(body)
-                    method = payload.get("method", "")
                     
+                    # Strip _meta from params if present to avoid Pydantic validation errors
+                    # in strict SDK versions that don't recognize progress tokens yet.
+                    if "params" in payload and isinstance(payload["params"], dict):
+                        payload["params"].pop("_meta", None)
+                    
+                    # Update body with cleaned payload
+                    body = json.dumps(payload).encode()
+                    
+                    method = payload.get("method", "")
                     if _HAS_CTX and is_protected_mcp_method(method):
                         auth_header = ""
                         for k, v in scope["headers"]:
