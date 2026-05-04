@@ -687,6 +687,7 @@ def create_app() -> Starlette:
         routes=[
             Route("/sse", endpoint=handle_sse),
             Route("/messages", endpoint=handle_messages, methods=["POST"]),
+            Route("/messages/", endpoint=handle_messages, methods=["POST"]),
             Route("/health", endpoint=handle_health),
         ],
         middleware=[
