@@ -20,12 +20,23 @@ CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=True)
 
 # ── Celery — derive from REDIS_URL if per-service vars are absent ─────────────
 # Heroku Redis add-on exports a single REDIS_URL; fall back to it automatically.
+# Note: For Heroku Redis SSL (rediss://), we must skip cert verification.
 _redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", _redis_url)
-CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", _redis_url)
 
-# Also update the Django cache location so it follows the same add-on URL
-CACHES["default"]["LOCATION"] = os.environ.get("REDIS_URL", REDIS_URL)  # noqa: F821
+# If REDIS_URL uses SSL (rediss://), append the parameter to skip cert verification for Celery
+_celery_url = _redis_url
+if _celery_url.startswith("rediss://") and "ssl_cert_reqs" not in _celery_url:
+    _celery_url += "?ssl_cert_reqs=none"
+
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", _celery_url)
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", _celery_url)
+
+# Update Django cache to skip SSL verification
+CACHES["default"]["LOCATION"] = _redis_url
+CACHES["default"]["OPTIONS"]["CONNECTION_POOL_KWARGS"] = {
+    "ssl_cert_reqs": None,
+    "max_connections": 100,
+}
 
 # ── Sentry — only initialise when a DSN is provided ──────────────────────────
 _SENTRY_DSN = env("SENTRY_DSN", default="")
