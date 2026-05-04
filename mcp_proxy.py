@@ -666,9 +666,8 @@ def create_app() -> Starlette:
             return Response(f"Could not parse message: {err}", status_code=400)
 
         # 5. Push to SDK
-        metadata = ServerMessageMetadata(request_context=request)
-        session_message = SessionMessage(message, metadata=metadata)
-        await writer.send(session_message)
+        # We send the unwrapped JSONRPCMessage directly to the server.run loop.
+        await writer.send(message)
 
         return Response("Accepted", status_code=202)
 
