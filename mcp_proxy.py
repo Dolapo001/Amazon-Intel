@@ -492,9 +492,10 @@ async def handle_list_tools() -> list[Tool]:
 # ── Tool dispatch ───────────────────────────────────────────────────────────
 
 def _err(message: str) -> dict:
+    import json
     data = {"error": message}
     res = {
-        "content": [{"type": "text", "text": message}],
+        "content": [{"type": "text", "text": json.dumps(data)}],
         "structuredContent": data,
         "isError": True,
     }
@@ -503,6 +504,7 @@ def _err(message: str) -> dict:
 
 
 def _ok(summary: str, data: dict) -> dict:
+    import json
     """Return an MCP result that satisfies both standard and Context Protocol requirements.
 
     1. `content`: Standard MCP TextContent (what the agent sees).
@@ -510,7 +512,7 @@ def _ok(summary: str, data: dict) -> dict:
     3. `**data`: Merge keys into the root so the `outputSchema` validation passes.
     """
     res = {
-        "content": [{"type": "text", "text": summary}],
+        "content": [{"type": "text", "text": json.dumps(data)}],
         "structuredContent": data,
     }
     # Merge keys to the root to satisfy outputSchema 'required' property checks
