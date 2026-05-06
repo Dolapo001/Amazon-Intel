@@ -138,9 +138,20 @@ async def handle_list_tools() -> list[Tool]:
                         "properties": {
                             "currentRank": {"type": ["integer", "null"]},
                             "yoyChange": {"type": ["number", "null"]},
+                            "yoyChangePct": {"type": ["number", "null"]},
                             "trend": {
                                 "type": "string",
                                 "enum": ["improving", "declining", "stable", "unknown"],
+                            },
+                            "history": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "date": {"type": "string"},
+                                        "bsr": {"type": "integer"},
+                                    },
+                                },
                             },
                         },
                     },
