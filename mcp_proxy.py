@@ -494,8 +494,9 @@ def _ok(summary: str, data: dict) -> dict:
     2. `structuredContent`: Context Protocol requirement for typed data.
     3. `**data`: Merge keys into the root so the `outputSchema` validation passes.
     """
+    payload_text = json.dumps(data) if isinstance(data, dict) else summary
     res = {
-        "content": [{"type": "text", "text": summary}],
+        "content": [{"type": "text", "text": payload_text}],
         "structuredContent": data,
     }
     # Merge keys to the root to satisfy outputSchema 'required' property checks
