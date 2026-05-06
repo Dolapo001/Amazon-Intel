@@ -176,8 +176,8 @@ async def handle_list_tools() -> list[Tool]:
                         "enum": ["real-time", "near-real-time", "cached", "stale"],
                     },
                     "cacheHit": {"type": "boolean"},
+                    "error": {"type": "string"},
                 },
-                "required": ["asin", "curated_summary"],
             },
             **{
                 "_meta": {
@@ -235,8 +235,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["opportunities", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -297,8 +297,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["trending", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -358,8 +358,8 @@ async def handle_list_tools() -> list[Tool]:
                         },
                     },
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["asin", "snapshots", "timestamp"],
             },
             **{
                 "_meta": {
@@ -413,8 +413,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["categories", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -473,8 +473,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["category_id", "items", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -492,10 +492,14 @@ async def handle_list_tools() -> list[Tool]:
 # ── Tool dispatch ───────────────────────────────────────────────────────────
 
 def _err(message: str) -> dict:
-    return {
+    data = {"error": message}
+    res = {
         "content": [{"type": "text", "text": message}],
+        "structuredContent": data,
         "isError": True,
     }
+    res.update(data)
+    return res
 
 
 def _ok(summary: str, data: dict) -> dict:
