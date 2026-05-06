@@ -58,9 +58,9 @@ AMAZON_URL_RE = re.compile(r"/dp/([A-Z0-9]{10})")
 # Listing response price (Query surface) is set in the marketplace UI.
 # Execute prices below are per method call, ~1/100 of the listing response
 # price per the Context Protocol pricing guidance.
-EXECUTE_PRICE_INTEL = "0.001"   # synthesised intelligence (paid call)
-EXECUTE_PRICE_RAW = "0.0005"    # normalised raw data
-EXECUTE_PRICE_DISCOVERY = "0.0002"  # enumeration / listing
+EXECUTE_PRICE_INTEL = "0.005"   # synthesised intelligence (paid call)
+EXECUTE_PRICE_RAW = "0.0025"    # normalised raw data
+EXECUTE_PRICE_DISCOVERY = "0.001"  # enumeration / listing
 
 BACKEND_RATE_LIMIT = {
     "maxRequestsPerMinute": 60,
