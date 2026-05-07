@@ -58,16 +58,66 @@ class ProductIntelligenceView(APIView):
         # ── 3. Force fresh ingestion (Always skip DB check per user request) ──
         invalidate_intel(asin_code)
         logger.info("force_sync_ingest_start", extra={"asin": asin_code})
-        from apps.ingestion.tasks import synchronous_full_ingest
+        from apps.ingestion.tasks import (
+            synchronous_full_ingest,
+            AsinNotIndexedError,
+            ScraperTimeoutError,
+            ScraperUnavailableError,
+        )
         try:
             # This will block but concurrent_fetch makes it fast (~5s usually)
             asin_obj = synchronous_full_ingest(asin_code)
             logger.info("force_sync_ingest_complete", extra={"asin": asin_code})
+            # Background prefetch: warm sibling ASINs so the next likely query is hot
+            self._prefetch_siblings(asin_obj)
+        except AsinNotIndexedError:
+            logger.info("asin_not_indexed", extra={"asin": asin_code})
+            return Response(
+                {
+                    "asin": asin_code,
+                    "isError": True,
+                    "reason": "asin_not_indexed",
+                    "message": (
+                        f"Amazon returned no product data for ASIN {asin_code}. "
+                        "Verify the ASIN is valid and currently listed on amazon.com."
+                    ),
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except (ScraperTimeoutError, ScraperUnavailableError) as exc:
+            # Transient upstream failure — queue async ingest and tell the
+            # caller to retry. 202 Accepted preserves the contract that the
+            # ASIN is being worked on, just not synchronously.
+            logger.warning(
+                "sync_ingest_transient_failure",
+                extra={"asin": asin_code, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+            enqueue_asin_refresh.delay(asin_code, priority="high")
+            return Response(
+                {
+                    "asin": asin_code,
+                    "isError": False,
+                    "status": "queued",
+                    "reason": "ingestion_in_progress",
+                    "retryAfterSeconds": 30,
+                    "message": (
+                        f"ASIN {asin_code} is being ingested. "
+                        "Retry the same request in ~30 seconds."
+                    ),
+                },
+                status=status.HTTP_202_ACCEPTED,
+                headers={"Retry-After": "30"},
+            )
         except Exception:
             logger.exception("sync_ingest_failed", extra={"asin": asin_code})
             return Response(
-                {"error": f"Failed to fetch fresh data for ASIN {asin_code}. Please verify the ASIN and try again."},
-                status=status.HTTP_404_NOT_FOUND
+                {
+                    "asin": asin_code,
+                    "isError": True,
+                    "reason": "ingestion_unavailable",
+                    "message": "Intelligence pipeline temporarily unavailable. Please retry.",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         
         # Increment query counter and promote tier if warranted
@@ -98,6 +148,28 @@ class ProductIntelligenceView(APIView):
         return Response(payload)
 
     # ── Helpers ────────────────────────────────────────────────────────────
+
+    def _prefetch_siblings(self, asin_obj: ASIN, limit: int = 5) -> None:
+        """Warm the cache for category siblings of a freshly ingested ASIN.
+
+        Cheap fan-out: when an agent queries one ASIN, the next query is often
+        a comparison or a top-of-category browse. Pre-warming the top sibling
+        ASINs in the same category cuts cold-start latency on follow-up calls.
+        """
+        try:
+            if not asin_obj.category_id:
+                return
+            siblings = (
+                ASIN.objects
+                .filter(category_id=asin_obj.category_id, last_ingested_at__isnull=False)
+                .exclude(asin=asin_obj.asin)
+                .order_by("-query_count")
+                .values_list("asin", flat=True)[:limit]
+            )
+            for sibling_asin in siblings:
+                enqueue_asin_refresh.delay(sibling_asin, priority="normal")
+        except Exception:
+            logger.exception("sibling_prefetch_failed", extra={"asin": asin_obj.asin})
 
     def _is_stale(self, asin_obj: ASIN) -> bool:
         """Return True if the ASIN data needs a background refresh or if data is incomplete."""
