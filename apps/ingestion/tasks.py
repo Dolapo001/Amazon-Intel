@@ -191,13 +191,41 @@ def ingest_asin(self, asin_code: str):
         raise self.retry(exc=exc)
 
 
+class IngestError(Exception):
+    """Base class for ingestion failures surfaced to the API layer."""
+
+
+class AsinNotIndexedError(IngestError):
+    """Scraper succeeded but Amazon returned no product for this ASIN."""
+
+
+class ScraperTimeoutError(IngestError):
+    """Upstream scraper exceeded its timeout budget."""
+
+
+class ScraperUnavailableError(IngestError):
+    """Upstream scraper API errored (auth, quota, 5xx, network)."""
+
+
 def synchronous_full_ingest(asin_code: str):
     """
     Used by the view for new ASINs to ensure immediate full response.
-    Raises if the scraper fails so the caller can return a proper error.
+    Raises a typed IngestError subclass so the caller can map to the right
+    HTTP status / structured payload.
     """
-    # Use sequential mode for better stability in synchronous API environment
-    _ingest_asin_internal(asin_code, parallel=False)
+    import httpx
+
+    try:
+        _ingest_asin_internal(asin_code, parallel=False)
+    except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+        raise ScraperTimeoutError(str(exc)) from exc
+    except ValueError as exc:
+        # _ingest_asin_internal raises ValueError when scraper returned no product
+        if "no data" in str(exc).lower() or "no record" in str(exc).lower():
+            raise AsinNotIndexedError(str(exc)) from exc
+        raise ScraperUnavailableError(str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise ScraperUnavailableError(str(exc)) from exc
 
     from apps.products.models import ASIN
     return ASIN.objects.get(asin=asin_code)
