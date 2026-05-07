@@ -58,9 +58,9 @@ AMAZON_URL_RE = re.compile(r"/dp/([A-Z0-9]{10})")
 # Listing response price (Query surface) is set in the marketplace UI.
 # Execute prices below are per method call, ~1/100 of the listing response
 # price per the Context Protocol pricing guidance.
-EXECUTE_PRICE_INTEL = "0.001"   # synthesised intelligence (paid call)
-EXECUTE_PRICE_RAW = "0.0005"    # normalised raw data
-EXECUTE_PRICE_DISCOVERY = "0.0002"  # enumeration / listing
+EXECUTE_PRICE_INTEL = "0.005"   # synthesised intelligence (paid call)
+EXECUTE_PRICE_RAW = "0.0025"    # normalised raw data
+EXECUTE_PRICE_DISCOVERY = "0.001"  # enumeration / listing
 
 BACKEND_RATE_LIMIT = {
     "maxRequestsPerMinute": 60,
@@ -138,9 +138,20 @@ async def handle_list_tools() -> list[Tool]:
                         "properties": {
                             "currentRank": {"type": ["integer", "null"]},
                             "yoyChange": {"type": ["number", "null"]},
+                            "yoyChangePct": {"type": ["number", "null"]},
                             "trend": {
                                 "type": "string",
                                 "enum": ["improving", "declining", "stable", "unknown"],
+                            },
+                            "history": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "date": {"type": "string"},
+                                        "bsr": {"type": "integer"},
+                                    },
+                                },
                             },
                         },
                     },
@@ -165,8 +176,8 @@ async def handle_list_tools() -> list[Tool]:
                         "enum": ["real-time", "near-real-time", "cached", "stale"],
                     },
                     "cacheHit": {"type": "boolean"},
+                    "error": {"type": "string"},
                 },
-                "required": ["asin", "curated_summary"],
             },
             **{
                 "_meta": {
@@ -224,8 +235,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["opportunities", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -286,8 +297,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["trending", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -347,8 +358,8 @@ async def handle_list_tools() -> list[Tool]:
                         },
                     },
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["asin", "snapshots", "timestamp"],
             },
             **{
                 "_meta": {
@@ -402,8 +413,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["categories", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -462,8 +473,8 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "total_count": {"type": "integer"},
                     "timestamp": {"type": "string", "format": "date-time"},
+                    "error": {"type": "string"},
                 },
-                "required": ["category_id", "items", "total_count", "timestamp"],
             },
             **{
                 "_meta": {
@@ -481,13 +492,19 @@ async def handle_list_tools() -> list[Tool]:
 # ── Tool dispatch ───────────────────────────────────────────────────────────
 
 def _err(message: str) -> dict:
-    return {
-        "content": [{"type": "text", "text": message}],
+    import json
+    data = {"error": message}
+    res = {
+        "content": [{"type": "text", "text": json.dumps(data)}],
+        "structuredContent": data,
         "isError": True,
     }
+    res.update(data)
+    return res
 
 
 def _ok(summary: str, data: dict) -> dict:
+    import json
     """Return an MCP result that satisfies both standard and Context Protocol requirements.
 
     1. `content`: Standard MCP TextContent (what the agent sees).
@@ -497,6 +514,7 @@ def _ok(summary: str, data: dict) -> dict:
     payload_text = json.dumps(data) if isinstance(data, dict) else summary
     res = {
         "content": [{"type": "text", "text": payload_text}],
+        "content": [{"type": "text", "text": json.dumps(data)}],
         "structuredContent": data,
     }
     # Merge keys to the root to satisfy outputSchema 'required' property checks

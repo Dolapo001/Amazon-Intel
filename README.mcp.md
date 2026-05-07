@@ -34,15 +34,15 @@ consumers. Every method in this server sets it explicitly.
 
 | Method | Surface | Execute price |
 | :--- | :--- | :--- |
-| `amazon_product_intelligence` | both | `$0.001` |
-| `find_market_opportunities` | both | `$0.001` |
-| `amazon_trending_products` | both | `$0.001` |
-| `get_bsr_history` | execute | `$0.0005` |
-| `get_all_categories` | both | `$0.0002` |
-| `browse_by_category` | both | `$0.0002` |
+| `amazon_product_intelligence` | both | `$0.005` |
+| `find_market_opportunities` | both | `$0.005` |
+| `amazon_trending_products` | both | `$0.005` |
+| `get_bsr_history` | execute | `$0.0025` |
+| `get_all_categories` | both | `$0.001` |
+| `browse_by_category` | both | `$0.001` |
 
 Set the **listing response price** (Query surface) in the marketplace
-Contribute form — `$0.10` per response is the recommended starting point for
+Contribute form — `$0.50` per response is the recommended starting point for
 this class of intelligence tool.
 
 ## Tool architecture

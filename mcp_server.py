@@ -37,9 +37,9 @@ from apps.analytics.scoring import calculate_opportunity_scores  # noqa: E402
 from apps.products.models import ASIN, Category  # noqa: E402
 
 # ── Marketplace pricing metadata (see Context Protocol pricing guidance) ────
-EXECUTE_PRICE_INTEL = "0.001"
-EXECUTE_PRICE_RAW = "0.0005"
-EXECUTE_PRICE_DISCOVERY = "0.0002"
+EXECUTE_PRICE_INTEL = "0.005"
+EXECUTE_PRICE_RAW = "0.0025"
+EXECUTE_PRICE_DISCOVERY = "0.001"
 
 DJANGO_RATE_LIMIT = {
     "maxRequestsPerMinute": 120,

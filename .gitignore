@@ -153,3 +153,4 @@ cython_debug/
 # Custom for this project
 resolv.conf.tmp
 *.tmp
+node_modules/
